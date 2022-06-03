@@ -2,6 +2,7 @@ import os
 import pickle
 import json
 import argparse
+import tqdm
 
 import torch
 import numpy as np
@@ -20,7 +21,8 @@ torch.manual_seed(0)
 parser = argparse.ArgumentParser()
 parser.add_argument('--tag', type=str)
 parser.add_argument('--test-set', type=str, default='El Rossinyol', choices=['CSD'])
-parser.add_argument('--f0-from-mix', action='store_true', default=True)
+parser.add_argument('--f0-from-mix', action='store_true', default=False)
+
 args, _ = parser.parse_known_args()
 
 tag = args.tag
@@ -30,6 +32,9 @@ is_u_net = tag[:4] == 'unet'
 parser.add_argument('--eval-tag', type=str, default=tag)
 args, _ = parser.parse_known_args()
 
+# single voice f0 tracker used (monophonic pitch tracker)
+f0_add_on = 'sf0'
+# multi voice f0 tracker used (polyphonic pitch tracker)
 if args.f0_from_mix: f0_add_on = 'mf0'
 
 if args.test_set == 'CSD': test_set_add_on = 'CSD'
@@ -87,10 +92,8 @@ for seed in range(n_seeds):
     rng_state_torch = torch.get_rng_state()
 
     #for d in data_loader:
-    for idx in range(len(test_set)):
-
-        d = test_set[idx]
-
+    pbar = tqdm.tqdm(test_set)
+    for d in pbar:
         mix = d[0].to(device)
         f0_hz = d[1].to(device)
         target_sources = d[2].to(device)
@@ -158,6 +161,10 @@ for seed in range(n_seeds):
             # compute mel cepstral distance
             mcd = em.mel_cepstral_distance(target_sources, source_estimates, fft_size=n_fft_metrics, overlap=overlap_metrics, device=device)
             mcd = mcd.reshape((batch_size, n_sources, -1)).cpu().numpy()
+            
+            # compute SI-SDR
+            si_sdr = em.si_sdr(target_sources, source_estimates)
+            si_sdr = si_sdr.reshape((batch_size, n_sources, -1)).cpu().numpy()
 
         n_eval_frames = snr.shape[-1]
 
@@ -173,18 +180,29 @@ for seed in range(n_seeds):
         si_snr_results_masking = [si_snr_masking[b, s, f] for b in range(batch_size) for s in range(n_sources) for f in range(n_eval_frames)]
         mcd_results_masking = [mcd_masking[b, s, f] for b in range(batch_size) for s in range(n_sources) for f in range(n_eval_frames)]
 
-        batch_results_masking = pd.DataFrame({'mix_name': mix_names, 'eval_seed': seed_results, 'voice': voice, 'eval_frame': eval_frame,
-                                              'sp_SNR': snr_results_masking, 'sp_SI-SNR': si_snr_results_masking,
-                                              'SI-SDR': si_sdr_results_masking, 'mel_cep_dist': mcd_results_masking})
+        batch_results_masking = pd.DataFrame({'mix_name': mix_names,
+                                              'eval_seed': seed_results,
+                                              'voice': voice, 
+                                              'eval_frame': eval_frame,
+                                              'sp_SNR': snr_results_masking,
+                                              'sp_SI-SNR': si_snr_results_masking,
+                                              'SI-SDR': si_sdr_results_masking,
+                                              'mel_cep_dist': mcd_results_masking})
         eval_results_masking = eval_results_masking.append(batch_results_masking, ignore_index=True)
 
         snr_results = [snr[b, s, f] for b in range(batch_size) for s in range(n_sources) for f in range(n_eval_frames)]
         si_snr_results = [si_snr[b, s, f] for b in range(batch_size) for s in range(n_sources) for f in range(n_eval_frames)]
         mcd_results = [mcd[b, s, f] for b in range(batch_size) for s in range(n_sources) for f in range(n_eval_frames)]
+        si_sdr_results = [si_sdr[b, s, f] for b in range(batch_size) for s in range(n_sources) for f in range(n_eval_frames)]
 
-        batch_results = pd.DataFrame({'mix_name': mix_names, 'eval_seed': seed_results, 'voice': voice, 'eval_frame': eval_frame,
-                                      'sp_SI-SNR': si_snr_results, 'sp_SNR': snr_results, 'mel_cep_dist': mcd_results})
-
+        batch_results = pd.DataFrame({'mix_name': mix_names,
+                                      'eval_seed': seed_results,
+                                      'voice': voice,
+                                      'eval_frame': eval_frame,
+                                      'sp_SNR': snr_results,
+                                      'sp_SI-SNR': si_snr_results,
+                                      'SI-SDR': si_sdr_results,
+                                      'mel_cep_dist': mcd_results})
         eval_results = eval_results.append(batch_results, ignore_index=True)
 
 
@@ -197,6 +215,7 @@ medians = eval_results.median(axis=0, skipna=True, numeric_only=True)
 stds = eval_results.std(axis=0, skipna=True, numeric_only=True)
 
 print(tag)
+print('SI-SDR:', 'mean', means['SI-SDR'], 'median', medians['SI-SDR'], 'std', stds['SI-SDR'])
 print('sp_SNR:', 'mean', means['sp_SNR'], 'median', medians['sp_SNR'], 'std', stds['sp_SNR'])
 print('sp_SI-SNR', 'mean', means['sp_SI-SNR'], 'median', medians['sp_SI-SNR'], 'std', stds['sp_SI-SNR'])
 print('mel cepstral distance:', 'mean', means['mel_cep_dist'], 'median', medians['mel_cep_dist'], 'std', stds['mel_cep_dist'])

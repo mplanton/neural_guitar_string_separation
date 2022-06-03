@@ -29,8 +29,14 @@ The following packages are required:
     resampy==0.2.2
     pandas==1.2.3
     tensorboard==2.3.0
-    
-    
+
+
+### Google Colab GPU environment dependencies
+
+`!pip install torch==1.6.0 torchaudio==0.6.0 matplotlib sounddevice==0.4.0 scipy pysoundfile tqdm 
+librosa==0.8.0 scikit-learn pandas resampy==0.2.2 tensorboard configargparse`
+
+
 ## Training
 
     python train.py -c config.txt

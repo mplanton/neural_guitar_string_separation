@@ -133,7 +133,7 @@ def save_checkpoint(
         os.path.join(path, tag + '.chkpnt')
     )
     if is_best:
-        # save just the weights
+        # save just the weights if it is the best model
         torch.save(
             state['state_dict'],
             os.path.join(path, tag + '.pth')

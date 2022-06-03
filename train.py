@@ -14,7 +14,6 @@ import copy
 import configargparse
 import shutil
 
-import matplotlib.pyplot as plt
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -30,10 +29,10 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
     if args.ss_loss_weight > 0: network.return_synth_controls = True
     if args.supervised: network.return_sources = True
     pbar = tqdm.tqdm(train_sampler, disable=args.quiet)
-    for data in pbar:
+    for d in pbar:
         pbar.set_description("Training batch")
-        x = data[0]  # mix
-        f0 = data[1]  # f0
+        x = d[0]  # mix
+        f0 = d[1]  # f0
         x, f0 = x.to(device), f0.to(device)
         optimizer.zero_grad()
         y_hat = network(x, f0)
@@ -47,14 +46,14 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
                                           delta_freq_weight=args.loss_delta_freq_weight,
                                           delta_time_weight=args.loss_delta_time_weight)
             if args.supervised:
-                x = data[2].transpose(1, 2).reshape((args.batch_size * args.n_sources, -1)).to(device)  # true sources [batch_size * n_sources, n_samples]
+                x = d[2].transpose(1, 2).reshape((args.batch_size * args.n_sources, -1)).to(device)  # true sources [batch_size * n_sources, n_samples]
                 y_hat = y_hat[1].reshape((args.batch_size * args.n_sources, -1))  # source estimates [batch_size * n_sources, n_samples]
             reconstruction_loss = loss_fn(x, y_hat) * args.reconstruction_loss_weight
             loss += reconstruction_loss
 
         if args.ss_loss_weight > 0:
             ss_loss_fn = losses.SelfSupervisionLoss(ss_weights_dict)
-            target_dict = data[2]
+            target_dict = d[2]
             ss_loss = ss_loss_fn(target_dict, y_hat) * args.ss_loss_weight
             loss += ss_loss
 
@@ -75,9 +74,9 @@ def valid(args, network, device, valid_sampler):
     network.eval()
     if args.supervised: network.return_sources = True
     with torch.no_grad():
-        for data in valid_sampler:
-            x = data[0]  # audio
-            f0 = data[1]  # f0
+        for d in valid_sampler:
+            x = d[0]  # audio
+            f0 = d[1]  # f0
             x, f0 = x.to(device), f0.to(device) #, z.to(device)
 
             y_hat = network(x, f0)
@@ -90,7 +89,7 @@ def valid(args, network, device, valid_sampler):
                                           delta_time_weight=args.loss_delta_time_weight)
             if args.supervised:
                 batch_size = f0.size(0)
-                x = data[2].transpose(1, 2).reshape((batch_size * args.n_sources, -1)).to(device)  # true sources [batch_size * n_sources, n_samples]
+                x = d[2].transpose(1, 2).reshape((batch_size * args.n_sources, -1)).to(device)  # true sources [batch_size * n_sources, n_samples]
                 y_hat = y_hat[1].reshape((batch_size * args.n_sources, -1))  # source estimates [batch_size * n_sources, n_samples]
             loss = loss_fn(x, y_hat)
             loss_container.update(loss.item(), f0.size(0))
@@ -149,6 +148,18 @@ def get_statistics(args, dataset):
     return scaler.mean_, std
 
 
+def save_model(tag, checkpoint, params, best_loss, valid_loss, target_path):
+    utils.save_checkpoint(
+        checkpoint,
+        is_best=valid_loss == best_loss,
+        path=target_path,
+        tag=tag
+    )
+
+    with open(Path(target_path,  tag + '.json'), 'w') as outfile:
+        outfile.write(json.dumps(params, indent=4, sort_keys=True))
+
+
 def main():
 
     parser = configargparse.ArgParser()
@@ -156,12 +167,18 @@ def main():
     #parser = argparse.ArgumentParser(description='Training')
 
     # experiment tag which will determine output folder in trained models, tensorboard name, etc.
-    parser.add_argument('--tag', type=str, default='test')
+    default_tag = 'test'
+    parser.add_argument('--tag', type=str, default=default_tag, help='experiment tag which will determine output folder in trained models, tensorboard name, etc.')
 
     # allow to pass a comment about the experiment
     parser.add_argument('--comment', type=str, help='comment about the experiment')
 
-    args, _ = parser.parse_known_args()
+    # Backup the trained model (e.g. Google Colab -> Google Drive)
+    parser.add_argument("--backup-path", type=str, default="",
+                        help="Path to successively backup the trained model during training (e.g. Google Colab -> Google Drive).")
+    parser.add_argument("--backup-interval", type=int, default=5,
+                        help="Number of epochs to wait for the next backup.")
+    
 
     # Dataset paramaters
     parser.add_argument('--dataset', type=str, default="musdb",
@@ -176,8 +193,7 @@ def main():
                         help='if True, only one song is used in BC dataset for training and validation')
 
 
-
-    parser.add_argument('--output', type=str, default="trained_models/{}/".format(args.tag),
+    parser.add_argument('--output', type=str, default="trained_models/{}/".format(default_tag),
                         help='provide output path base folder name')
 
     parser.add_argument('--wst-model', type=str, help='Path to checkpoint folder for warmstart')
@@ -271,9 +287,15 @@ def main():
     # create output dir if not exist
     target_path = Path(args.output)
     target_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create backup dir
+    if len(args.backup_path) != 0:
+        os.makedirs(args.backup_path, exist_ok=True)
 
-    # copy config.txt to output dir
-    shutil.copy2('config.txt', target_path)
+    # copy config file to output dir and backup dir
+    shutil.copy2(args.my_config, target_path)
+    if len(args.backup_path) != 0:
+        shutil.copy2(args.my_config, args.backup_path)
 
     writer = SummaryWriter(log_dir=os.path.join('tensorboard', args.tag))
 
@@ -389,19 +411,14 @@ def main():
             train_loss=train_loss, val_loss=valid_loss
         )
 
-        utils.save_checkpoint({
-            'epoch': epoch + 1,
+        checkpoint = {
+            'epoch': epoch,
             'state_dict': model_to_train.state_dict(),
             'best_loss': es.best,
             'optimizer': optimizer.state_dict(),
             'scheduler': scheduler.state_dict()
-        },
-            is_best=valid_loss == es.best,
-            path=target_path,
-            tag=args.tag
-        )
-
-        # save params
+        }
+        
         params = {
             'epochs_trained': epoch,
             'args': vars(args),
@@ -412,14 +429,23 @@ def main():
             'train_time_history': train_times,
             'num_bad_epochs': es.num_bad_epochs
         }
+        
+        # save trained model
+        save_model(args.tag, checkpoint, params, es.best, valid_loss, target_path)
 
-        with open(Path(target_path,  args.tag + '.json'), 'w') as outfile:
-            outfile.write(json.dumps(params, indent=4, sort_keys=True))
+        # backup trained model
+        if len(args.backup_path) != 0 and ((epoch-1) % args.backup_interval) == 0:
+            save_model(args.tag, checkpoint, params, es.best, valid_loss, args.backup_path)
+            print("\nModel backup saved to:", args.backup_path, "\n")
 
         train_times.append(time.time() - end)
 
         if stop:
             print("Apply Early Stopping")
+            # backup trained model
+            if len(args.backup_path) != 0:
+                save_model(args.tag, checkpoint, params, es.best, valid_loss, args.backup_path)
+                print("\nModel backup saved to:", args.backup_path, "\n")
             break
 
 

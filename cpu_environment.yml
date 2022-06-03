@@ -1,0 +1,20 @@
+name: umss
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - torchaudio=0.6.0
+  - pytorch=1.6.0
+  - cpuonly
+  - matplotlib=3.3.1
+  - python-sounddevice=0.4.0
+  - scipy=1.5.2
+  - pysoundfile=0.10.3
+  - tqdm=4.49.0
+  - librosa=0.8.0
+  - scikit-learn=0.23.2
+  - pandas=1.2.3
+  - resampy=0.2.2
+  - tensorboard=2.3.0
+  - configargparse
+prefix: /home/manuel/anaconda3/envs/umss

@@ -17,7 +17,7 @@ import csv
 import itertools
 
 import utils
-import ddsp.core, ddsp.synthetic_data
+import ddsp.core
 
 
 def load_datasets(parser, args):
@@ -270,7 +270,6 @@ class CSD(torch.utils.data.Dataset):
             # deterministic set of examples
             # tuple of example parameters (audio excerpt id, (tuple of voices), (tuple of singer ids))
             params = self.examples[idx]
-
             excerpt_idx, voice_indices, singer_indices = params
             audio_start_seconds = excerpt_idx * self.example_length / self.sample_rate
 
