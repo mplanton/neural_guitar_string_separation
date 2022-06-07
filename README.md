@@ -6,6 +6,9 @@ It contains a re-implementation of parts of the DDSP library in PyTorch. We adde
 
 Please cite the paper, if you use parts of the code in your work.
 
+**Modified by Manuel Planton for Guitar String separation.**
+
+
 ## Links
 [:loud_sound: Audio examples](https://schufo.github.io/umss/)
 
