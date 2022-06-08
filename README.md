@@ -49,7 +49,11 @@ librosa==0.8.0 scikit-learn pandas resampy==0.2.2 tensorboard configargparse`
 ## Evaluation
 
     python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD'
-    
+
+## Inference
+
+    python inference.py --tag 'TAG' --test-set CSD --song_name 'El Rossinyol'
+
 ## Acknowledgment
 
 This project has received funding from the European Union's Horizon 2020 research and innovation programme under the Marie Skłodowska-Curie grant agreement No. 765068.

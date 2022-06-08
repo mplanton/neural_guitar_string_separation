@@ -6,8 +6,12 @@ import torchaudio
 import numpy as np
 import os
 import tqdm
+import argparse
+import json
+import glob
+import random
 
-import models # trained model architecture
+import models # Needed to load trained model architecture
 import utils
 
 
@@ -15,51 +19,52 @@ class SongDataset(Dataset):
     """
     A dataset class to make source separation with a single song.
     """
-    def __init__(self, dataset_path="../Datasets/ChoralSingingDataset",
-                 song_name="Nino Dios",
-                 example_length=64000):
-        # load 3 sources
-        if song_name == "Nino Dios":
-            s1_voice = "nino_Bajos_104"
-            s2_voice = "nino_ContraAlt_107"
-            s3_voice = "nino_tenor1-06-2"
-        elif song_name == "El Rossinyol":
-            s1_voice = "rossinyol_Bajos_107"
-            s2_voice = "rossinyol_ContraAlt_1-06"
-            s3_voice = "rossinyol_Tenor1-09"
+    def __init__(self, model_args, test_set='CSD', song_name="Nino Dios", example_length=64000):
+        if test_set == 'CSD':
+            self.ds_path = "../Datasets/ChoralSingingDataset/"
         
-        s1_path = os.path.join(dataset_path, song_name, "audio_16kHz", s1_voice + ".wav")
-        s2_path = os.path.join(dataset_path, song_name, "audio_16kHz", s2_voice + ".wav")
-        s3_path = os.path.join(dataset_path, song_name, "audio_16kHz", s3_voice + ".wav")
-        s1, sr = torchaudio.load(s1_path)
-        s2, sr = torchaudio.load(s2_path)
-        s3, sr = torchaudio.load(s3_path)
-        self.sr = sr
+        # choose sources
+        voice_dict = {'b': "Bajos", 'a': "ContraAlt", 's': "Soprano", 't': "Tenor"}
+        
+        source_paths = []
+        for v in model_args['voices']:
+            voice = voice_dict[v]
+            voice_paths = glob.glob(os.path.join(self.ds_path, song_name, "audio_16kHz",
+                                                 "*" + voice + "*.wav"))
+            voice_path = random.choice(voice_paths)
+            source_paths.append(voice_path)
+        
+        # load sources
+        sources = []
+        for source_path in source_paths:
+            s, sr = torchaudio.load(source_path)
+            sources.append(s)
+            self.sr = sr
 
         # Make them equal length.
         self.example_length = example_length
-        min_len = min(s1.shape[1], s2.shape[1], s3.shape[1])
+        lengths = [s.shape[1] for s in sources]
+        min_len = min(lengths)
         cut_len = (min_len // example_length) * example_length
-        s1 = s1[0,:cut_len]
-        s2 = s2[0,:cut_len]
-        s3 = s3[0,:cut_len]
+        sources = [s[0, :cut_len] for s in sources]
 
         # load sources f0-tracks
-        f0_1 = np.load(os.path.join(dataset_path, song_name, "crepe_f0_center", s1_voice + "_frequency.npy"))
-        f0_2 = np.load(os.path.join(dataset_path, song_name, "crepe_f0_center", s2_voice + "_frequency.npy"))
-        f0_3 = np.load(os.path.join(dataset_path, song_name, "crepe_f0_center", s3_voice + "_frequency.npy"))
+        freqs = []
+        for source_path in source_paths:
+            f_name = source_path.split('/')[-1].split('.')[0] + "_frequency.npy"
+            freq = np.load(os.path.join(self.ds_path, song_name, "crepe_f0_center", f_name))
+            freqs.append(freq)
 
-        # Make f0s equal length
+        # Make frequencies equal length
         hopsize = 256 # CREPE hopsize 16ms in samples
         self.hopsize = hopsize
-        f0_1 = torch.from_numpy(f0_1[:cut_len // hopsize])
-        f0_2 = torch.from_numpy(f0_2[:cut_len // hopsize])
-        f0_3 = torch.from_numpy(f0_3[:cut_len // hopsize])
-        self.freqs = torch.stack((f0_1, f0_2, f0_3), dim=1)  # [n_frames, n_sources]
-        self.f0s_per_example = example_length // hopsize
+        freqs = [torch.from_numpy(freq[:cut_len // hopsize]) for freq in freqs]
+        self.freqs = torch.stack(freqs, dim=1)  # [n_frames, n_sources]
+        self.freqs_per_example = example_length // hopsize
 
         # Make mix from sources and normalize
-        mix = s1 + s2 + s3
+        sources = torch.stack(sources)  # (n_sources, n_samples)
+        mix = torch.sum(sources, dim=0) # (n_samples)
         mix_max = mix.abs().max()
         self.mix = mix / mix_max
 
@@ -69,15 +74,22 @@ class SongDataset(Dataset):
     
     def __getitem__(self, index):
         mix_slice = self.mix[index * self.example_length : (index+1) * self.example_length]
-        freqs_slice = self.freqs[index * self.f0s_per_example : (index+1) * self.f0s_per_example]
+        freqs_slice = self.freqs[index * self.freqs_per_example : (index+1) * self.freqs_per_example]
         return mix_slice, freqs_slice
 
 #------------------------------------------------------------------------------
 
-tag = "small_model"
-model_path = "trained_models/small_model"
-eval_path = "evaluation"
-n_sources = 3
+parser = argparse.ArgumentParser()
+parser.add_argument('--tag', type=str, help="Model tag defined in the config at training time.")
+parser.add_argument('--test-set', type=str, choices=['CSD'], help="Dataset used for inference.")
+parser.add_argument('--song-name', type=str, default='El Rossinyol', help="Song name of the specified dataset used for inference.")
+args, _ = parser.parse_known_args()
+tag = args.tag
+
+with open("trained_models/" + tag + "/" + tag + ".json") as f:
+    info = json.load(f)
+
+model_path = "trained_models/" + tag
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -88,10 +100,12 @@ trained_model.return_sources = True
 
 batch_size = model_args['batch_size']
 n_samples = model_args['example_length']
-loader = iter(DataLoader(SongDataset(song_name="El Rossinyol"), batch_size=batch_size, shuffle=False))
+n_sources = model_args['n_sources']
+loader = iter(DataLoader(SongDataset(model_args=model_args, song_name=args.song_name),
+                                     batch_size=batch_size, shuffle=False))
 
 # Feed mix and f0-tracks in example_length chunks to the model for separation
-# and collect output.
+# and collect the output.
 source_estimates_slices = []
 source_estimates_masking_slices = []
 
@@ -112,6 +126,10 @@ source_estimates_masking_slices = torch.cat(source_estimates_masking_slices).tra
 source_estimates = torch.reshape(source_estimates_slices, (n_sources, -1))
 source_estimates_masking = torch.reshape(source_estimates_masking_slices, (n_sources, -1))
 
+out_path = "inference/" + tag
+os.makedirs("inference", exist_ok=True)
+os.makedirs(out_path, exist_ok=True)
+
 for i in range(source_estimates.shape[0]):
-    torchaudio.save("source_estimate_" + str(i) + ".wav", source_estimates[i], sample_rate=16000)
-    torchaudio.save("source_estimate_masking" + str(i) + ".wav", source_estimates_masking[i], sample_rate=16000)
+    torchaudio.save(out_path + "/" + args.song_name + "_source_estimate_" + str(i) + ".wav", source_estimates[i], sample_rate=16000)
+    torchaudio.save(out_path + "/" + args.song_name + "_source_estimate_masking" + str(i) + ".wav", source_estimates_masking[i], sample_rate=16000)
