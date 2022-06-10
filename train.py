@@ -311,7 +311,7 @@ def main():
 
     train_dataset, valid_dataset, args = data.load_datasets(parser, args)
 
-
+    # TODO: shuffle je nach Dataset?
     train_sampler = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
         worker_init_fn=utils.worker_init_fn,
