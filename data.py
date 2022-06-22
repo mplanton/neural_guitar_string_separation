@@ -177,9 +177,9 @@ def load_datasets(parser, args):
     elif args.dataset == "Guitarset":
         parser.add_argument('--n-files-per-style-genre', type=int, default=6,
                             help="Number of files per style and genre (1-36) " \
-                               + "of test and validation set.")
+                               + "of test *and* validation set.")
         parser.add_argument('--valid-split', type=float, default=0.2,
-                            help="Ratio of validation data.")
+                            help="Ratio of the validation files from all files.")
         parser.add_argument('--style', type=str, default="comp",
                             help="Playing style: 'comp' = comping, 'solo' =" +\
                                  " soloing, 'all' = comping and soloing.")
