@@ -656,7 +656,7 @@ class Guitarset(torch.utils.data.Dataset):
         allowed_strings: list of int, List of string numbers representing the sources
             (from high to low).
             1 = higher E, 2 = B, 3 = G, 4 = D, 5 = A, 6 = lower E
-        shuffle_files: bool, If True, the recordings order is randomized per batch.
+        shuffle_files: bool, If True, the recordings order is randomized per epoch.
         conf_threshold: float, threshold on CREPE confidence value to differentiate between voiced/unvoiced frames
         example_length: int, Length of the audio examples in samples.
         return_name: bool, If True, the names of the audio examples are returned (composed of title and string-number).
