@@ -293,7 +293,8 @@ def main():
         os.makedirs(args.backup_path, exist_ok=True)
 
     # copy config file to output dir and backup dir
-    shutil.copy2(args.my_config, target_path)
+    if len(args.wst_model) == 0:
+        shutil.copy2(args.my_config, target_path)
     if len(args.backup_path) != 0:
         shutil.copy2(args.my_config, args.backup_path)
 
@@ -353,11 +354,12 @@ def main():
 
     # if a model is specified: resume training
     if args.wst_model:
-        model_path = Path(os.path.join('trained_models', args.wst_model)).expanduser()
-        with open(Path(model_path, args.wst_model + '.json'), 'r') as stream:
+        model_path = args.wst_model
+        model_file_name = [name for name in model_path.split('/') if name != ""][-1]
+        with open(os.path.join(model_path, model_file_name + ".json"), 'r') as stream:
             results = json.load(stream)
 
-        target_model_path = Path(model_path, args.wst_model + ".pth")
+        target_model_path = os.path.join(model_path, model_file_name + ".pth")
         state_dict = torch.load(target_model_path, map_location=device)
         model_to_train.load_state_dict(state_dict)
 

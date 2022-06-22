@@ -200,11 +200,11 @@ def load_datasets(parser, args):
         parser.add_argument('--f0-cuesta', action='store_true', default=False)
         args = parser.parse_args()
         
-        n_test_files = int((1 - args.valid_split) * args.n_files_per_style_genre)
+        n_train_files = int((1 - args.valid_split) * args.n_files_per_style_genre)
         n_valid_files = int(args.valid_split * args.n_files_per_style_genre)
         
         train_dataset = Guitarset(
-            dataset_range=(0, n_test_files),
+            dataset_range=(0, n_train_files),
             style=args.style,
             genres=args.genres,
             allowed_strings=args.strings,
@@ -216,7 +216,7 @@ def load_datasets(parser, args):
             cunet_original=False)
         
         valid_dataset = Guitarset(
-            dataset_range=(n_test_files, n_test_files + n_valid_files),
+            dataset_range=(n_train_files, n_train_files + n_valid_files),
             style=args.style,
             genres=args.genres,
             allowed_strings=args.strings,
@@ -395,6 +395,70 @@ class CSD(torch.utils.data.Dataset):
 
         if self.return_name: return mix, frequencies, sources, name, voices
         else: return mix, frequencies, sources
+
+
+class CSDSongDataset(torch.utils.data.Dataset):
+    """
+    A dataset class to make source separation with a single song of the Choral Singing Dataset.
+    This is practical for inference.
+    """
+    def __init__(self, model_args, test_set='CSD', song_name="Nino Dios", example_length=64000):
+        self.ds_path = "../Datasets/ChoralSingingDataset/"
+        
+        # choose sources
+        self.voice_dict = {'b': "Bajos", 'a': "ContraAlt", 's': "Soprano", 't': "Tenor"}
+        
+        source_paths = []
+        for v in model_args['voices']:
+            voice = self.voice_dict[v]
+            voice_paths = glob.glob(os.path.join(self.ds_path, song_name, "audio_16kHz",
+                                                 "*" + voice + "*.wav"))
+            voice_path = random.choice(voice_paths)
+            source_paths.append(voice_path)
+        
+        # load sources
+        sources = []
+        for source_path in source_paths:
+            s, sr = torchaudio.load(source_path)
+            sources.append(s)
+            self.sr = sr
+
+        # Make them equal length.
+        self.example_length = example_length
+        lengths = [s.shape[1] for s in sources]
+        min_len = min(lengths)
+        cut_len = (min_len // example_length) * example_length
+        sources = [s[0, :cut_len] for s in sources]
+
+        # load sources f0-tracks
+        freqs = []
+        for source_path in source_paths:
+            f_name = source_path.split('/')[-1].split('.')[0] + "_frequency.npy"
+            freq = np.load(os.path.join(self.ds_path, song_name, "crepe_f0_center", f_name))
+            freqs.append(freq)
+
+        # Make frequencies equal length
+        hopsize = 256 # CREPE hopsize 16ms in samples
+        self.hopsize = hopsize
+        freqs = [torch.from_numpy(freq[:cut_len // hopsize]) for freq in freqs]
+        self.freqs = torch.stack(freqs, dim=1)  # [n_frames, n_sources]
+        self.freqs_per_example = example_length // hopsize
+
+        # Make mix from sources and normalize
+        self.sources = torch.stack(sources)  # (n_sources, n_samples)
+        mix = torch.sum(sources, dim=0) # (n_samples)
+        mix_max = mix.abs().max()
+        self.mix = mix / mix_max
+
+    
+    def __len__(self):
+        return len(self.mix) // self.example_length
+    
+    def __getitem__(self, index):
+        mix_slice = self.mix[index * self.example_length : (index+1) * self.example_length]
+        freqs_slice = self.freqs[index * self.freqs_per_example : (index+1) * self.freqs_per_example]
+        sources_slice = self.sources[index * self.example_length : (index+1) * self.example_length]
+        return mix_slice, freqs_slice, sources_slice
 
 
 
@@ -599,6 +663,7 @@ class Guitarset(torch.utils.data.Dataset):
         f0_from_mix: bool, If True, use Cuesta multiple f0 tracker data, if False use
             CREPE single f0 tracker data as frequency information.
         cunet_original: bool, Set to True, if using the CU-Net original.
+        file_list: list, If a list of files is present, the used files for the dataset are not specified by the `dataset_range`, but by this list.
     """
     def __init__(self,
                  dataset_range=(0, 36),
@@ -610,7 +675,8 @@ class Guitarset(torch.utils.data.Dataset):
                  example_length=64000,
                  return_name=False,
                  f0_from_mix=False,
-                 cunet_original=False):
+                 cunet_original=False,
+                 file_list=False):
         super().__init__()
         
         # Check arguments
@@ -636,19 +702,24 @@ class Guitarset(torch.utils.data.Dataset):
         self.offset_correction = 0.04
         self.crepe_dir = "../Datasets/Guitarset/crepe_f0_center/"
         self.f0_cuesta_dir = f"../Datasets/Guitarset/mixtures_{self.n_sources}_sources/mf0_cuesta_processed"
+        self.file_list = file_list
         
         # Sort and filter file paths.
         # Paths have to be sorted first to get distinct datasets from files
         # (train, valid, test).
         audio_files = sorted(glob.glob("../Datasets/Guitarset/audio_16kHz/*.wav"))
-        if style != 'all':
-            audio_files = [path for path in audio_files if style in path]
         
-        self.audio_files = []
-        for genre in self.genres:
-            start = dataset_range[0]
-            stop = dataset_range[1]
-            self.audio_files += [path for path in audio_files if genre.lower() in path.lower()][start:stop]
+        if not file_list:
+            if style != 'all':
+                audio_files = [path for path in audio_files if style in path]
+            
+            self.audio_files = []
+            for genre in self.genres:
+                start = dataset_range[0]
+                stop = dataset_range[1]
+                self.audio_files += [path for path in audio_files if genre.lower() in path.lower()][start:stop]
+        else:
+            self.audio_files = self.file_list
         
         # Randomize filtered file paths.
         if self.shuffle_files == True:
@@ -714,6 +785,9 @@ class Guitarset(torch.utils.data.Dataset):
         """
         
         audio_file_path, local_idx, local_range = self.get_file_and_index(idx)
+        
+        #DBG
+        #print("DBG: path:", audio_file_path, "loc-idx:", local_idx, "loc-range:", local_range)
         
         # Calculate start/end times and frames with corrections.
         # make sure the audio start time corresponds to a frame for which f0 was estimates with CREPE
@@ -807,6 +881,45 @@ def testGuitarset():
         # Plot freqs
         plot_channels(freqs, batch_num, ds.allowed_strings, "Freqs" + str(batch_num))
 
+def debugEvalGuitarset():
+    import models
+    from torch.utils.data import DataLoader
+    device = 'cpu'
+    tag = 'guitarset_test'
+    f0_cuesta = False
+    
+    trained_model, model_args = utils.load_model(tag, device, return_args=True)
+    
+    n_files_per_style_genre = model_args['n_files_per_style_genre']
+    valid_split = model_args['valid_split']
+    n_train_files = int((1 - valid_split) * n_files_per_style_genre)
+    n_valid_files = int(valid_split * n_files_per_style_genre)
+    # Use same amount of test data as validation data.
+    # We use the next unused files of the Dataset.
+    n_test_files = n_valid_files
+    
+    test_set = Guitarset(
+        dataset_range=(n_train_files + n_valid_files,
+                       n_train_files + n_valid_files + n_test_files),
+        style=model_args['style'],
+        genres=model_args['genres'],
+        allowed_strings=model_args['strings'],
+        shuffle_files=False,
+        conf_threshold=model_args['confidence_threshold'],
+        example_length=model_args['example_length'],
+        return_name=True,
+        f0_from_mix=f0_cuesta,
+        cunet_original=False)
+    
+    # Ist das problem pbar statt iter(Dataloader(ds))?
+    loader = iter(DataLoader(test_set, batch_size=1, shuffle=False))
+    pbar = tqdm.tqdm(loader)
+    
+    #pbar = tqdm.tqdm(test_set)
+    for d in pbar:
+        print(d)
+    
+
 if __name__ == "__main__":
-    testGuitarset()
+    debugEvalGuitarset()
     

@@ -5,6 +5,7 @@ import argparse
 import tqdm
 
 import torch
+from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 import librosa as lb
@@ -20,7 +21,7 @@ torch.manual_seed(0)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--tag', type=str)
-parser.add_argument('--test-set', type=str, default='El Rossinyol', choices=['CSD'])
+parser.add_argument('--test-set', type=str, default='El Rossinyol', choices=['CSD', 'Guitarset'])
 parser.add_argument('--f0-from-mix', action='store_true', default=False)
 
 args, _ = parser.parse_known_args()
@@ -38,6 +39,7 @@ f0_add_on = 'sf0'
 if args.f0_from_mix: f0_add_on = 'mf0'
 
 if args.test_set == 'CSD': test_set_add_on = 'CSD'
+if args.test_set == 'Guitarset': test_set_add_on = 'Guitarset'
 
 path_to_save_results = 'evaluation/{}/eval_results_{}_{}'.format(args.eval_tag, f0_add_on, test_set_add_on)
 if not os.path.isdir(path_to_save_results):
@@ -55,11 +57,14 @@ trained_model, model_args = utils.load_model(tag, device, return_args=True)
 trained_model.return_synth_params = False
 trained_model.return_sources=True
 
+
 voices = model_args['voices'] if 'voices' in model_args.keys() else 'satb'
 original_cunet = model_args['original_cu_net'] if 'original_cu_net' in model_args.keys() else False
+n_sources = model_args['n_sources'] if 'n_sources' in model_args.keys() else None
 f0_cuesta = args.f0_from_mix
 
 
+# CSD Dataset
 if args.test_set == 'CSD':
     el_rossinyol = data.CSD(song_name='El Rossinyol', example_length=model_args['example_length'], allowed_voices=voices,
                         return_name=True, n_sources=model_args['n_sources'], singer_nb=[2], random_mixes=False,
@@ -75,6 +80,30 @@ if args.test_set == 'CSD':
 
     test_set = torch.utils.data.ConcatDataset([el_rossinyol, locus_iste, nino_dios])
 
+# Guitarset Dataset
+# TODO: do not hard code dataset parameters
+if args.test_set == "Guitarset":
+    n_files_per_style_genre = model_args['n_files_per_style_genre']
+    valid_split = model_args['valid_split']
+    n_train_files = int((1 - valid_split) * n_files_per_style_genre)
+    n_valid_files = int(valid_split * n_files_per_style_genre)
+    # Use same amount of test data as validation data.
+    # We use the next unused files of the Dataset.
+    n_test_files = n_valid_files
+    
+    test_set = data.Guitarset(
+        dataset_range=(n_train_files + n_valid_files,
+                       n_train_files + n_valid_files + n_test_files),
+        style=model_args['style'],
+        genres=model_args['genres'],
+        allowed_strings=model_args['strings'],
+        shuffle_files=False,
+        conf_threshold=model_args['confidence_threshold'],
+        example_length=model_args['example_length'],
+        return_name=True,
+        f0_from_mix=f0_cuesta,
+        cunet_original=False)
+
 
 eval_results = pd.DataFrame({'mix_name': [], 'eval_seed': [], 'voice': [], 'eval_frame': [], 'sp_SNR': [], 'sp_SI-SNR': [],
                              'mel_cep_dist': []})
@@ -84,15 +113,18 @@ eval_results_masking = pd.DataFrame({'mix_name': [], 'eval_seed': [], 'voice': [
 
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 
-if is_u_net: n_seeds = 1
+if is_u_net or args.test_set == "Guitarset": n_seeds = 1
 else: n_seeds = 5
 
 for seed in range(n_seeds):
     torch.manual_seed(seed)
     rng_state_torch = torch.get_rng_state()
 
-    #for d in data_loader:
-    pbar = tqdm.tqdm(test_set)
+    if args.test_set == "CSD" or is_u_net:
+        pbar = tqdm.tqdm(test_set)
+    else:
+        pbar = tqdm.tqdm(iter(DataLoader(test_set, batch_size=1, shuffle=False)))
+    
     for d in pbar:
         mix = d[0].to(device)
         f0_hz = d[1].to(device)
@@ -100,8 +132,10 @@ for seed in range(n_seeds):
         name = d[3]
         voices = d[4]
 
-        mix = mix.unsqueeze(0)
-        target_sources = target_sources.unsqueeze(0)
+        if args.test_set != "Guitarset":
+            mix = mix.unsqueeze(0)
+            target_sources = target_sources.unsqueeze(0)
+
         f0_hz = f0_hz[None, :, :]
 
         batch_size, n_samples, n_sources = target_sources.shape
