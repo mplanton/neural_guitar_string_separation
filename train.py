@@ -30,7 +30,6 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
     if args.supervised: network.return_sources = True
     pbar = tqdm.tqdm(train_sampler, disable=args.quiet)
     for d in pbar:
-        pbar.set_description("Training batch")
         x = d[0]  # mix
         f0 = d[1]  # f0
         x, f0 = x.to(device), f0.to(device)
@@ -62,7 +61,9 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
             y_hat, lsf = y_hat
             lsf_loss = lsf_loss_fn(lsf) * args.loss_lsf_weight
             loss -= lsf_loss
-
+        
+        pbar.set_description("Training batch (train_loss: %4.3f)" % loss)
+        
         loss.backward()
         optimizer.step()
         loss_container.update(loss.item(), f0.size(0))
@@ -155,7 +156,6 @@ def save_model(tag, checkpoint, params, best_loss, valid_loss, target_path):
         path=target_path,
         tag=tag
     )
-
     with open(Path(target_path,  tag + '.json'), 'w') as outfile:
         outfile.write(json.dumps(params, indent=4, sort_keys=True))
 
@@ -398,7 +398,7 @@ def main():
     # if a model is specified: resume training
     if args.wst_model:
         model_path = args.wst_model
-        model_file_name = [name for name in model_path.split('/') if name != ""][-1]
+        model_file_name = args.tag
         with open(os.path.join(model_path, model_file_name + ".json"), 'r') as stream:
             results = json.load(stream)
 

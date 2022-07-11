@@ -640,7 +640,7 @@ class Guitarset(torch.utils.data.Dataset):
     recordings with an average duration of 30 seconds.
     
     The dataset is expected to have a sample rate of 16kHz and f0 information
-    must be provided via singel f0 tracking with CREPE or via multiple f0
+    must be provided via single f0 tracking with CREPE or via multiple f0
     tracking with Cuesta.
     
     Args:

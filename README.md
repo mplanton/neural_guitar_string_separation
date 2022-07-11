@@ -48,7 +48,7 @@ librosa==0.8.0 scikit-learn pandas resampy==0.2.2 tensorboard configargparse`
 
 Resume training with:
 
-    python train.py -c config.txt --wst-model path/to/checkpoint
+    python train.py -c config.txt --wst-model path/to/checkpoint/directory
 
 ## Evaluation
 

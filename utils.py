@@ -124,9 +124,7 @@ def bandwidth_to_max_bin(rate, n_fft, bandwidth):
     return np.max(np.where(freqs <= bandwidth)[0]) + 1
 
 
-def save_checkpoint(
-        state, is_best, path, tag
-):
+def save_checkpoint(state, is_best, path, tag):
     # save full checkpoint including optimizer
     torch.save(
         state,
