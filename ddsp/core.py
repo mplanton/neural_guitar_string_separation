@@ -1430,6 +1430,64 @@ class SimpleLowpass:
         self.alpha = self.alpha.detach()
         self.last_y = self.last_y.detach()
 
+# Extension to the DDSP library
+class Queue:
+    """
+    A queue for block based read/write.
+    The queue has the shape [batch_size, channel_size, length].
+    It is implemented to read and write blocks along the length dimension.
+    It has a fixed length and does not check for buffer overflows!
+    
+    Args:
+        batch_size: batch size of the queue
+        channel_size: channel size of the queue
+        length: length of the queue
+    """
+    def __init__(self, batch_size, channel_size, length):
+        self.length = length
+        self.buffer = torch.zeros((batch_size, channel_size, length))
+        self.write_idx = 0
+        self.read_idx = 0
+    
+    def write(self, signal):
+        """
+        Write into the queue.
+        Args:
+            signal: The signal to write to the queue.
+        """
+        sig_len = signal.shape[-1]
+        if self.write_idx + sig_len <= self.length - 1:
+            self.buffer[..., self.write_idx: self.write_idx + sig_len] = signal
+            self.write_idx += sig_len
+        else:
+            # Wrap around
+            first = self.length - self.write_idx
+            last = sig_len - first
+            self.buffer[..., self.write_idx : ] = signal[..., : first]
+            self.buffer[..., : last] = signal[..., first : ]
+            self.write_idx = last
+    
+    def read(self, read_length):
+        """
+        Read from the queue.
+        Args:
+            read_length: The length to read from the queue.
+        Returns:
+            Read signal with shape [batch_size, channel_size, read_length]
+        """
+        if self.read_idx + read_length <= self.length - 1:
+            out = self.buffer[..., self.read_idx : self.read_idx + read_length]
+            self.read_idx += read_length
+        else:
+            first = self.length - self.read_idx
+            last = read_length - first
+            # Wrap around
+            out_first = self.buffer[..., self.read_idx : ]
+            out_last = self.buffer[..., : last]
+            out = torch.cat((out_first, out_last), dim=-1)
+            self.read_idx = last
+        return out  
+
 
 def frequencies_sigmoid(freqs: torch.Tensor,
                         depth: int = 1,
