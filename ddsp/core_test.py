@@ -2,11 +2,12 @@ import numpy as np
 from scipy import signal
 import torch
 import matplotlib.pyplot as plt
-import spectrum
+import math
+#import spectrum
 
 import unittest
 
-from ddsp import core, synths
+import core, synths
 
 
 class TestCore(unittest.TestCase):
@@ -110,29 +111,65 @@ class TestCore(unittest.TestCase):
         self.assertLessEqual(total_difference, threshold)
 
 
-    def test_lsf_to_filter_coeff(self):
+    # def test_lsf_to_filter_coeff(self):
 
-        lsf = [0.0483, 0.1020, 0.1240, 0.2139, 0.3012, 0.5279, 0.6416, 0.6953, 0.9224,
-               1.1515, 1.2545, 1.3581, 1.4875, 1.7679, 1.9860, 2.2033, 2.3631, 2.5655,
-               2.6630, 2.8564]
+    #     lsf = [0.0483, 0.1020, 0.1240, 0.2139, 0.3012, 0.5279, 0.6416, 0.6953, 0.9224,
+    #            1.1515, 1.2545, 1.3581, 1.4875, 1.7679, 1.9860, 2.2033, 2.3631, 2.5655,
+    #            2.6630, 2.8564]
 
-        a_pyspec = spectrum.lsf2poly(lsf)  # numpy-based method
-        a_torch = core.lsf_to_filter_coeff(torch.tensor(lsf)[None, None, :])  # PyTorch implementation
+    #     a_pyspec = spectrum.lsf2poly(lsf)  # numpy-based method
+    #     a_torch = core.lsf_to_filter_coeff(torch.tensor(lsf)[None, None, :])  # PyTorch implementation
 
-        a_pyspec = a_pyspec[1:]  # remove 0th coefficient a_0 = 1
-        a_torch = a_torch.numpy()[0, 0, :]
+    #     a_pyspec = a_pyspec[1:]  # remove 0th coefficient a_0 = 1
+    #     a_torch = a_torch.numpy()[0, 0, :]
 
-        difference = a_pyspec - a_torch
+    #     difference = a_pyspec - a_torch
+    #     mean_difference = abs(difference).mean()
+
+    #     threshold = 1e-5
+    #     self.assertLessEqual(mean_difference, threshold)
+
+    def test_delay_line_delay(self):
+        threshold = 5e-2
+        
+        batch_size = 4
+        sr = 16000
+        delay_time = 0.5 # sec
+        
+        dl = core.DelayLine(delay_time, torch.ones(batch_size) * delay_time, sr)
+        
+        dur = 1 # sec
+        f = 100
+        t = torch.linspace(0, dur, int(dur * sr)).repeat(batch_size, 1)
+        x = torch.sin(2 * np.pi * f * t)
+        y = torch.zeros(*x.shape)
+        for i in range(x.shape[1]):
+            y[:, i] = dl(x[:, i])
+        
+        y_target = torch.cat((torch.zeros(batch_size, int(delay_time * sr)),
+                              x[:, :math.ceil((dur - delay_time) * sr)]), dim=1)
+        difference = y_target.numpy() - y.numpy()
         mean_difference = abs(difference).mean()
-
-        threshold = 1e-5
         self.assertLessEqual(mean_difference, threshold)
-
+        
+        # change delay
+        delay_time = 0.123456789
+        
+        dl.clear_state()
+        dl.set_delay(torch.ones(batch_size) * delay_time)
+        y = torch.zeros(*x.shape)
+        for i in range(x.shape[1]):
+            y[:, i] = dl(x[:, i])
+        
+        y_target = torch.cat((torch.zeros(batch_size, int(delay_time * sr)),
+                              x[:, :math.ceil((dur - delay_time) * sr)]), dim=1)
+        difference = y_target.numpy() - y.numpy()
+        mean_difference = abs(difference).mean()
+        self.assertLessEqual(mean_difference, threshold)
+        
 
 if __name__ == '__main__':
-
-    # test = TestCore()
-    # test.test_apply_all_pole_filter()
-    # quit()
+    #test = TestCore()
+    #test.test_delay_line_delay()
 
     unittest.main()

@@ -1258,6 +1258,179 @@ def apply_all_pole_filter(audio: torch.Tensor,
     return audio_out
 
 
+# Extension to the DDSP library for physical modeling
+class DelayLine:
+    """
+    Differentiable Fractional Delay Line
+    
+    delay_line_length: float, Length of the delay lines in seconds
+    delay_time: torch.tensor of shape [batch_size, ], Initial delay in seconds
+    sr: int, sample rate
+    """
+    def __init__(self, delay_line_length, delay_time, sr):
+        super().__init__()
+        
+        assert type(delay_line_length) in [float, int], \
+            f"delay_line_length must be of type float or int but is of type {type(delay_line_length)}!"
+        assert delay_line_length > 0, \
+            f"delay_line_length must be greater than zero but is {delay_line_length}!"
+        assert type(delay_time) == torch.Tensor, \
+            f"delay_time must be of type torch.Tensor but is {type(delay_time)}!"
+        assert len(delay_time.shape) == 1, \
+            f"delay_time must have shape [batch_size, ] but has shape {delay_time.shape}"
+        
+        self.sr = sr
+        self.batch_size = delay_time.shape[0]
+        self.buffer_length = int(np.ceil(delay_line_length * sr))
+        # Fractional delay in samples
+        self.delay = delay_time.type(torch.float32) * sr
+        # Fractional part of the delay for interpolation
+        self.eta = self.delay - torch.floor(self.delay)
+        self.buffer = torch.zeros((self.batch_size, self.buffer_length))
+        self.write_idx = torch.floor(self.delay).type(torch.int) - 1
+        self.read_idx = torch.zeros(self.batch_size).type(torch.int)
+    
+    def bufferInit(self, x):
+        """
+        Initialize the buffer with a signal x without moving the read or write
+        indices.
+        
+        x: torch.Tensor, signal with shape [batch_size, sig_len]
+        """
+        sig_len = x.shape[1]
+        assert x.shape[0] == self.batch_size, \
+            f"Batch size dimension 0 must equal delay lines batch size of {self.batch_size}."
+        assert sig_len <= self.buffer_length, \
+            f"Signal x's length must be smaller or equal to the delay lines buffer length of {self.buffer_length}."
+        
+        for batch in range(self.batch_size):
+            start = self.read_idx[batch]
+            stop = start + sig_len
+            if stop <= self.buffer_length:
+                self.buffer[batch, start : stop] = x[batch]
+            else:
+                middle = self.buffer_length - start
+                stop = sig_len - middle
+                self.buffer[batch, start :] = x[batch, : middle]
+                self.buffer[batch, : stop] = x[batch, middle :]
+    
+    def set_delay(self, delay_time):
+        """
+        Set the delay time of the delay line.
+        
+        delay_time: torch.tensor of shape[batch_size, ], delay in seconds
+        """
+        self.delay = delay_time * self.sr # fractional delay in samples
+        self.eta = self.delay - torch.floor(self.delay)
+        # For time varying f0 there should be a strategy to prevent artifacts.
+        self.read_idx = self.write_idx - torch.floor(self.delay).type(torch.int64)
+        for batch in range(self.batch_size):
+            if self.read_idx[batch] < 0:
+                self.read_idx[batch] += self.buffer_length
+    
+    def __call__(self, x, interpolate=True):
+        """
+        Write and read a sample to and from the buffer.
+        
+        x: torch.tensor of shape [batch_size, ],
+           Input sample to be delayed is written into the delay line
+        
+        Returns: torch.tensor of shape [batch_size, ],
+                 the delayed sample read from the delay line
+        """
+        y = torch.zeros(self.batch_size)
+        for batch in range(self.batch_size):
+            # write one sample
+            self.buffer[batch, self.write_idx[batch]] = x[batch]
+
+            if interpolate == True:            
+                # read one sample, linearly interpolated
+                y_1 = self.buffer[batch, self.read_idx[batch]]
+                idx_2 = (self.read_idx[batch] + 1) % self.buffer_length
+                y_2 = self.buffer[batch, idx_2]
+                y[batch] = (1 - self.eta[batch]) * y_1 + self.eta[batch] * y_2
+            else:
+                #Read without inpterpolation
+                y[batch] = self.buffer[batch, self.read_idx[batch]]
+
+            # Update and wrap read/write pointers
+            self.write_idx[batch] = (self.write_idx[batch] + 1) % self.buffer_length
+            self.read_idx[batch] = (self.read_idx[batch] + 1) % self.buffer_length
+        return y
+
+    def clear_state(self):
+        """
+        Set the internal state of the delay line to zero
+        and detach from current graph.
+        """
+        self.buffer = torch.zeros(*self.buffer.shape)
+    
+    def detach(self):
+        """
+        Hold the internal state of the delay line
+        and detach from current graph.
+        """
+        self.buffer = self.buffer.detach()
+
+
+# Extension to the DDSP library for physical modeling
+class SimpleLowpass:
+    """
+    A simple parametric IIR filter that holds its state.
+    
+    from:
+    https://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
+    accessed: 28.06.2022
+    
+    fc: torch.Tensor of shape [batch_size, ], cutoff frequency per batch
+    sr: int, sample rate
+    """
+    def __init__(self, fc, sr):
+        assert type(fc) == torch.Tensor, \
+            f"fc must be of type torch.Tensor but is {type(fc)}!"
+        assert len(fc.shape) == 1, \
+            f"fc must have shape [batch_size, ] but has shape {fc.shape}"
+        
+        self.dt = 1 / sr
+        self.fc = fc
+        self.alpha = (2 * np.pi * self.dt * fc) / (2 * np.pi * self.dt * fc + 1)
+        self.last_y = torch.zeros(len(fc))
+    
+    def set_fc(self, fc):
+        assert type(fc) == torch.Tensor, \
+            f"fc must be of type torch.Tensor but is {type(fc)}!"
+        assert len(fc.shape) == 1, \
+            f"fc must have shape [batch_size, ] but has shape {fc.shape}"
+        self.alpha = (2 * np.pi * self.dt * fc) / (2 * np.pi * self.dt * fc + 1)
+    
+    def __call__(self, x):
+        """
+        Calculate one output sample from one input sample.
+        x: torch.tensor of shape [batch_size, ]
+        """
+        assert x.shape == self.last_y.shape, \
+            f"x must have shape {self.last_y.shape} but has shape {x.shape}!"
+        y = self.alpha * x + (1 - self.alpha) * self.last_y
+        self.last_y = y
+        return y
+    
+    def clear_state(self):
+        """
+        Set the internal state of the filter to zero
+        and detach from current graph.
+        """
+        self.alpha = (2 * np.pi * self.dt * self.fc) / (2 * np.pi * self.dt * self.fc + 1)
+        self.last_y = torch.zeros(len(self.fc))
+
+    def detach(self):
+        """
+        Hold the internal state of the filter
+        and detach from current graph.
+        """
+        self.alpha = self.alpha.detach()
+        self.last_y = self.last_y.detach()
+
+
 def frequencies_sigmoid(freqs: torch.Tensor,
                         depth: int = 1,
                         hz_min: float = 0.0,

@@ -1,7 +1,7 @@
 # ----- GENERAL PARAMETERS ---------------------------
 
 tag: CSD_4voice_vocal_model
-comment: Vocal model trained on a single song of the Choral Singing Dataset separating 3 voices (can be S, A, T or B).
+comment: Vocal model trained on a single song of the Choral Singing Dataset separating 4 voices (can be S, A, T or B).
 architecture: SourceFilterMixtureAutoencoder2
 
 
