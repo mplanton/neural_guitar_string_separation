@@ -130,24 +130,37 @@ class TestCore(unittest.TestCase):
     #     self.assertLessEqual(mean_difference, threshold)
 
     def test_delay_line_delay(self):
-        threshold = 5e-2
+        threshold = 0.1
         
-        batch_size = 4
-        sr = 16000
+        batch_size = 2
+        n_sources = 3
         delay_time = 0.5 # sec
+        sr = 16000
+
+        delays = torch.ones((batch_size, n_sources)) * delay_time
         
-        dl = core.DelayLine(delay_time, torch.ones(batch_size) * delay_time, sr)
+        dl = core.DelayLine(batch_size, n_sources, delay_time, sr)
+        dl.set_delay(delays)
         
         dur = 1 # sec
-        f = 100
-        t = torch.linspace(0, dur, int(dur * sr)).repeat(batch_size, 1)
+        f = 1000
+        t = torch.linspace(0, dur, int(dur * sr))
         x = torch.sin(2 * np.pi * f * t)
+        x = x.unsqueeze(0).repeat(n_sources, 1).unsqueeze(0).repeat(batch_size, 1, 1)
         y = torch.zeros(*x.shape)
-        for i in range(x.shape[1]):
-            y[:, i] = dl(x[:, i])
+        sig_len = x.shape[2]
+        for i in range(sig_len):
+            y[..., i] = dl(x[..., i])
         
-        y_target = torch.cat((torch.zeros(batch_size, int(delay_time * sr)),
-                              x[:, :math.ceil((dur - delay_time) * sr)]), dim=1)
+        #DBG:
+        #plt.figure()
+        #for batch in range(batch_size):
+        #    for delay_line in range(n_sources):
+        #        plt.plot(y[batch, delay_line].numpy(), alpha=0.4)
+        
+        
+        y_target = torch.cat((torch.zeros(batch_size, n_sources, int(delay_time * sr)),
+                              x[..., : math.ceil((dur - delay_time) * sr)]), dim=-1)
         difference = y_target.numpy() - y.numpy()
         mean_difference = abs(difference).mean()
         self.assertLessEqual(mean_difference, threshold)
@@ -156,17 +169,19 @@ class TestCore(unittest.TestCase):
         delay_time = 0.123456789
         
         dl.clear_state()
-        dl.set_delay(torch.ones(batch_size) * delay_time)
+        dl.set_delay(torch.ones((batch_size, n_sources)) * delay_time)
         y = torch.zeros(*x.shape)
-        for i in range(x.shape[1]):
-            y[:, i] = dl(x[:, i])
+        for i in range(sig_len):
+            y[..., i] = dl(x[..., i])
         
-        y_target = torch.cat((torch.zeros(batch_size, int(delay_time * sr)),
-                              x[:, :math.ceil((dur - delay_time) * sr)]), dim=1)
+        y_target = torch.cat((torch.zeros(batch_size, n_sources, int(delay_time * sr)),
+                              x[..., : math.ceil((dur - delay_time) * sr)]), dim=-1)
         difference = y_target.numpy() - y.numpy()
         mean_difference = abs(difference).mean()
         self.assertLessEqual(mean_difference, threshold)
+        
     
+    #TODO: this may not be needed............
     def test_queue(self):
         # Test Queue class
         threshold = 1e-5

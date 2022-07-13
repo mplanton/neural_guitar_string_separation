@@ -1261,101 +1261,86 @@ def apply_all_pole_filter(audio: torch.Tensor,
 # Extension to the DDSP library for physical modeling
 class DelayLine:
     """
-    Differentiable Fractional Delay Line
+    A bank of Fractional Delay Lines
     
-    delay_line_length: float, Length of the delay lines in seconds
-    delay_time: torch.tensor of shape [batch_size, ], Initial delay in seconds
-    sr: int, sample rate
+    Each delay line has its own delay parameter.
+    The delay lines are indexed via [batch_size, n_delays, length].
+    Call `set_delay(delay_time)` before using the delay.
+    
+    batch_size: int, Batch size of the delay lines
+    n_delays: int, Number of delay lines per batch
+    length: float, Length of the delay lines in seconds
+    sr: int, sample rate in Hertz
     """
-    def __init__(self, delay_line_length, delay_time, sr):
+    def __init__(self, batch_size: int,
+                       n_delays: int,
+                       length: float,
+                       sr: int):
         super().__init__()
-        
-        assert type(delay_line_length) in [float, int], \
-            f"delay_line_length must be of type float or int but is of type {type(delay_line_length)}!"
-        assert delay_line_length > 0, \
-            f"delay_line_length must be greater than zero but is {delay_line_length}!"
-        assert type(delay_time) == torch.Tensor, \
-            f"delay_time must be of type torch.Tensor but is {type(delay_time)}!"
-        assert len(delay_time.shape) == 1, \
-            f"delay_time must have shape [batch_size, ] but has shape {delay_time.shape}"
-        
+        self.batch_size = batch_size
+        self.n_delays = n_delays
+        self.max_delay_length = length
         self.sr = sr
-        self.batch_size = delay_time.shape[0]
-        self.buffer_length = int(np.ceil(delay_line_length * sr))
+        
+        # Delay line length in samples
+        self.buffer_length = int(np.ceil(length * sr)) + 1
         # Fractional delay in samples
-        self.delay = delay_time.type(torch.float32) * sr
+        self.delay = torch.zeros((batch_size, n_delays))
         # Fractional part of the delay for interpolation
-        self.eta = self.delay - torch.floor(self.delay)
-        self.buffer = torch.zeros((self.batch_size, self.buffer_length))
-        self.write_idx = torch.floor(self.delay).type(torch.int) - 1
-        self.read_idx = torch.zeros(self.batch_size).type(torch.int)
-    
-    def bufferInit(self, x):
-        """
-        Initialize the buffer with a signal x without moving the read or write
-        indices.
-        
-        x: torch.Tensor, signal with shape [batch_size, sig_len]
-        """
-        sig_len = x.shape[1]
-        assert x.shape[0] == self.batch_size, \
-            f"Batch size dimension 0 must equal delay lines batch size of {self.batch_size}."
-        assert sig_len <= self.buffer_length, \
-            f"Signal x's length must be smaller or equal to the delay lines buffer length of {self.buffer_length}."
-        
-        for batch in range(self.batch_size):
-            start = self.read_idx[batch]
-            stop = start + sig_len
-            if stop <= self.buffer_length:
-                self.buffer[batch, start : stop] = x[batch]
-            else:
-                middle = self.buffer_length - start
-                stop = sig_len - middle
-                self.buffer[batch, start :] = x[batch, : middle]
-                self.buffer[batch, : stop] = x[batch, middle :]
+        self.eta = torch.zeros((batch_size, n_delays))
+        # State of the delay line
+        self.buffer = torch.zeros((batch_size, n_delays, self.buffer_length))
+        self.write_idx = torch.zeros((batch_size, n_delays)).type(torch.int)
+        self.read_idx = torch.zeros((batch_size, n_delays)).type(torch.int)
     
     def set_delay(self, delay_time):
         """
         Set the delay time of the delay line.
         
-        delay_time: torch.tensor of shape[batch_size, ], delay in seconds
+        delay_time: torch.tensor of shape[batch_size, n_delays], delay in seconds
         """
-        self.delay = delay_time * self.sr # fractional delay in samples
+        assert torch.any(delay_time <= self.max_delay_length), \
+            "The delay must be smaller than the maximum delay line length!"
+        # fractional delay in samples
+        self.delay = delay_time * self.sr
+        # just the fractional part of the delay in samples
         self.eta = self.delay - torch.floor(self.delay)
-        # For time varying f0 there should be a strategy to prevent artifacts.
-        self.read_idx = self.write_idx - torch.floor(self.delay).type(torch.int64)
-        for batch in range(self.batch_size):
-            if self.read_idx[batch] < 0:
-                self.read_idx[batch] += self.buffer_length
+        # TODO: For time varying f0 there should be a strategy to prevent artifacts.
+        self.read_idx = self.write_idx - torch.floor(self.delay).type(torch.int)
+        # Wrap around if necessary
+        self.read_idx %= self.buffer_length
     
     def __call__(self, x, interpolate=True):
         """
         Write and read a sample to and from the buffer.
         
-        x: torch.tensor of shape [batch_size, ],
-           Input sample to be delayed is written into the delay line
+        x: torch.tensor of shape [batch_size, n_delays],
+           Input sample to be delayed is written into the delay lines
         
-        Returns: torch.tensor of shape [batch_size, ],
-                 the delayed sample read from the delay line
+        Returns: torch.tensor of shape [batch_size, n_delays],
+                 The delayed sample read from the delay lines
         """
-        y = torch.zeros(self.batch_size)
+        y = torch.zeros(self.batch_size, self.n_delays)
+        
         for batch in range(self.batch_size):
-            # write one sample
-            self.buffer[batch, self.write_idx[batch]] = x[batch]
-
-            if interpolate == True:            
-                # read one sample, linearly interpolated
-                y_1 = self.buffer[batch, self.read_idx[batch]]
-                idx_2 = (self.read_idx[batch] + 1) % self.buffer_length
-                y_2 = self.buffer[batch, idx_2]
-                y[batch] = (1 - self.eta[batch]) * y_1 + self.eta[batch] * y_2
-            else:
-                #Read without inpterpolation
-                y[batch] = self.buffer[batch, self.read_idx[batch]]
-
-            # Update and wrap read/write pointers
-            self.write_idx[batch] = (self.write_idx[batch] + 1) % self.buffer_length
-            self.read_idx[batch] = (self.read_idx[batch] + 1) % self.buffer_length
+            for delay_line in range(self.n_delays):
+                # write one sample
+                sample_idx = batch, delay_line, self.write_idx[batch, delay_line].item()
+                self.buffer[sample_idx] = x[batch, delay_line]
+    
+                if interpolate == True:            
+                    # read one sample, linearly interpolated
+                    y_1 = self.buffer[batch, delay_line, self.read_idx[batch, delay_line]]
+                    idx_2 = (self.read_idx[batch, delay_line] + 1) % self.buffer_length
+                    y_2 = self.buffer[batch, delay_line, idx_2]
+                    y[batch, delay_line] = (1 - self.eta[batch, delay_line]) * y_1 + self.eta[batch, delay_line] * y_2
+                else:
+                    # Read without inpterpolation
+                    y[batch, delay_line] = self.buffer[batch, delay_line, self.read_idx[batch]]
+    
+        # Update and wrap read/write pointers
+        self.write_idx = (self.write_idx + 1) % self.buffer_length
+        self.read_idx = (self.read_idx + 1) % self.buffer_length
         return y
 
     def clear_state(self):
@@ -1378,35 +1363,39 @@ class SimpleLowpass:
     """
     A simple parametric IIR filter that holds its state.
     
+    Each lowpass has its own cutoff frequency.
+    The filters are indexed via [batch_size, n_filters].
+    Call `set_fc(fc)` before using the filter.
+    
     from:
     https://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
     accessed: 28.06.2022
     
-    fc: torch.Tensor of shape [batch_size, ], cutoff frequency per batch
+    batch_size: int, Batch size
+    n_filters: int, Number of filters per batch
     sr: int, sample rate
     """
-    def __init__(self, fc, sr):
-        assert type(fc) == torch.Tensor, \
-            f"fc must be of type torch.Tensor but is {type(fc)}!"
-        assert len(fc.shape) == 1, \
-            f"fc must have shape [batch_size, ] but has shape {fc.shape}"
-        
+    def __init__(self, batch_size, n_filters, sr):
         self.dt = 1 / sr
-        self.fc = fc
-        self.alpha = (2 * np.pi * self.dt * fc) / (2 * np.pi * self.dt * fc + 1)
-        self.last_y = torch.zeros(len(fc))
+        # Initialize cutoff frequency
+        fc = sr / 2
+        alpha = (2 * np.pi * self.dt * fc) / (2 * np.pi * self.dt * fc + 1)
+        self.alpha = torch.ones((batch_size, n_filters)) * alpha
+        self.last_y = torch.zeros((batch_size, n_filters))
     
     def set_fc(self, fc):
-        assert type(fc) == torch.Tensor, \
-            f"fc must be of type torch.Tensor but is {type(fc)}!"
-        assert len(fc.shape) == 1, \
-            f"fc must have shape [batch_size, ] but has shape {fc.shape}"
+        """
+        fc: torch.tensor of shape [batch_size, n_filters],
+            the cutoff frequencies the filters should be set to
+        """
+        assert fc.shape == self.alpha.shape, \
+            f"fc must have shape {self.alpha.shape} but has shape {fc.shape}!"
         self.alpha = (2 * np.pi * self.dt * fc) / (2 * np.pi * self.dt * fc + 1)
     
     def __call__(self, x):
         """
         Calculate one output sample from one input sample.
-        x: torch.tensor of shape [batch_size, ]
+        x: torch.tensor of shape [batch_size, n_filters]
         """
         assert x.shape == self.last_y.shape, \
             f"x must have shape {self.last_y.shape} but has shape {x.shape}!"
@@ -1429,64 +1418,6 @@ class SimpleLowpass:
         """
         self.alpha = self.alpha.detach()
         self.last_y = self.last_y.detach()
-
-# Extension to the DDSP library
-class Queue:
-    """
-    A queue for block based read/write.
-    The queue has the shape [batch_size, channel_size, length].
-    It is implemented to read and write blocks along the length dimension.
-    It has a fixed length and does not check for buffer overflows!
-    
-    Args:
-        batch_size: batch size of the queue
-        channel_size: channel size of the queue
-        length: length of the queue
-    """
-    def __init__(self, batch_size, channel_size, length):
-        self.length = length
-        self.buffer = torch.zeros((batch_size, channel_size, length))
-        self.write_idx = 0
-        self.read_idx = 0
-    
-    def write(self, signal):
-        """
-        Write into the queue.
-        Args:
-            signal: The signal to write to the queue.
-        """
-        sig_len = signal.shape[-1]
-        if self.write_idx + sig_len <= self.length - 1:
-            self.buffer[..., self.write_idx: self.write_idx + sig_len] = signal
-            self.write_idx += sig_len
-        else:
-            # Wrap around
-            first = self.length - self.write_idx
-            last = sig_len - first
-            self.buffer[..., self.write_idx : ] = signal[..., : first]
-            self.buffer[..., : last] = signal[..., first : ]
-            self.write_idx = last
-    
-    def read(self, read_length):
-        """
-        Read from the queue.
-        Args:
-            read_length: The length to read from the queue.
-        Returns:
-            Read signal with shape [batch_size, channel_size, read_length]
-        """
-        if self.read_idx + read_length <= self.length - 1:
-            out = self.buffer[..., self.read_idx : self.read_idx + read_length]
-            self.read_idx += read_length
-        else:
-            first = self.length - self.read_idx
-            last = read_length - first
-            # Wrap around
-            out_first = self.buffer[..., self.read_idx : ]
-            out_last = self.buffer[..., : last]
-            out = torch.cat((out_first, out_last), dim=-1)
-            self.read_idx = last
-        return out  
 
 
 def frequencies_sigmoid(freqs: torch.Tensor,
