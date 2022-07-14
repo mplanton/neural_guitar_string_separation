@@ -817,6 +817,8 @@ class KarplusStrong(processors.Processor):
                  n_strings=6,
                  min_freq=20,
                  excitation_length=0.005):
+        assert n_samples % audio_frame_size == 0.0, \
+            "The n_frames must be a multiple of audio_frame_size!"
         super().__init__()
         self.batch_size = batch_size
         self.n_samples = n_samples
@@ -841,10 +843,17 @@ class KarplusStrong(processors.Processor):
         self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
         # Use just white noise as excitation signal by now...
         self.excitation = torch.rand(self.n_excitation_samples) * 2 - 1
+        #DBG
+        #self.excitation = torch.linspace(-0.5, 0.5, self.n_excitation_samples)
+        #self.excitation = torch.clamp(99999*self.excitation, min=-0.5, max=0.5)
+        
         # An excitation signal may reach into the next train example.
         self.last_excitation_overhead = torch.zeros(batch_size,
                                                     n_strings,
                                                     self.n_excitation_samples)
+        
+        self.diff = core.Diff(batch_size=batch_size, n_channels=n_strings)
+        self.last_valid_f0 = torch.ones((batch_size, n_strings)) * min_freq
     
     def get_controls(self, f0_hz, fc, on_offsets):
         """
@@ -859,29 +868,44 @@ class KarplusStrong(processors.Processor):
                    1 -> 0 offset
                    torch.tensor of shape [batch_size, n_strings, n_frames, 1]
         """
-        
-        # Fundamental periods
-        t0s = core.safe_divide(1, f0_hz)
-        # Set fundamental period to maximum delay
-        t0s [t0s > self.max_delay] = self.max_delay
-        t0s = t0s.squeeze(-1)
-        
-        fc = fc.squeeze(-1)
+        assert len(f0_hz.shape) == 4
+        assert len(fc.shape) == 4
+        assert len(on_offsets.shape) == 4
+        assert f0_hz.shape == fc.shape and fc.shape == on_offsets.shape, \
+            "Shapes of f0_hz, fc and on_offsets must be equal, but shapes " \
+            f"of f0_hz: {f0_hz.shape}, fc {fc.shape}, on_offsets: {on_offsets.shape}"
+        n_frames = f0_hz.shape[2]
         
         # Distinguish onsets = 1 from offsets = -1
         # Differentiate the on_offsets gate signal
         on_offsets = on_offsets.squeeze(-1)
-        on_offsets = on_offsets[..., 1:] - on_offsets[..., :-1]
-        start = torch.zeros((self.batch_size, self.n_strings, 1))
-        on_offsets = torch.cat((start, on_offsets), dim=-1)
-        
+        on_offsets = self.diff(on_offsets)
+        end = torch.zeros((self.batch_size, self.n_strings, 1))
+        on_offsets = torch.cat((on_offsets, end), dim=-1)
         # Separate note onsets and offsets
         onsets = torch.clamp(on_offsets, 0, 1)
         offsets = torch.clamp(on_offsets, -1, 0) * -1
-        
         # Convert onsets to sample indices: [batch, string, frame].
         onset_frame_indices = torch.nonzero(onsets, as_tuple=False)
+        
+        # If note is off, stay at last valid fundamental frequency.
+        f0_hz = f0_hz.squeeze(-1)
+        for batch in range(self.batch_size):
+            for string in range(self.n_strings):
+                for frame in range(n_frames):
+                    if f0_hz[batch, string, frame] == 0:
+                        f0_hz[batch, string, frame] = self.last_valid_f0[batch, string]
+                    else:
+                        self.last_valid_f0[batch, string] = f0_hz[batch, string, frame]
+        
+        # Fundamental periods
+        t0s = core.safe_divide(1, f0_hz)
+        # Limit fundamental period to maximum delay
+        t0s [t0s > self.max_delay] = self.max_delay
 
+        # Cutoff frequencies        
+        fc = fc.squeeze(-1)
+        
         return {"t0s": t0s,
                 'fcs': fc,
                 'onset_frame_indices': onset_frame_indices,

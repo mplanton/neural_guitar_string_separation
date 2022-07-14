@@ -1409,7 +1409,7 @@ class SimpleLowpass:
         and detach from current graph.
         """
         self.alpha = (2 * np.pi * self.dt * self.fc) / (2 * np.pi * self.dt * self.fc + 1)
-        self.last_y = torch.zeros(len(self.fc))
+        self.last_y = torch.zeros(*self.last_y.shape)
 
     def detach(self):
         """
@@ -1419,6 +1419,90 @@ class SimpleLowpass:
         self.alpha = self.alpha.detach()
         self.last_y = self.last_y.detach()
 
+# Extension to the DDSP library for physical modeling
+class SimpleHighpass:
+    """
+    A simple parametric IIR filter that holds its state.
+    
+    Each highpass has its own cutoff frequency.
+    The filters are indexed via [batch_size, n_filters].
+    Call `set_fc(fc)` before using the filter.
+    
+    from:
+    https://en.wikipedia.org/wiki/High-pass_filter
+    accessed: 14.07.2022
+    
+    batch_size: int, Batch size
+    n_filters: int, Number of filters per batch
+    sr: int, sample rate
+    """
+    def __init__(self, batch_size, n_filters, sr):
+        self.dt = 1 / sr
+        # Initialize cutoff frequency
+        fc = sr / 2
+        alpha = 1 / (2 * np.pi * self.dt * fc + 1)
+        self.alpha = torch.ones((batch_size, n_filters)) * alpha
+        self.last_x = torch.zeros((batch_size, n_filters))
+        self.last_y = torch.zeros((batch_size, n_filters))
+    
+    def set_fc(self, fc):
+        """
+        fc: torch.tensor of shape [batch_size, n_filters],
+            the cutoff frequencies the filters should be set to
+        """
+        assert fc.shape == self.alpha.shape, \
+            f"fc must have shape {self.alpha.shape} but has shape {fc.shape}!"
+        self.alpha = 1 / (2 * np.pi * self.dt * fc + 1)
+    
+    def __call__(self, x):
+        """
+        Calculate one output sample from one input sample.
+        x: torch.tensor of shape [batch_size, n_filters]
+        """
+        assert x.shape == self.last_y.shape, \
+            f"x must have shape {self.last_y.shape} but has shape {x.shape}!"
+        y = self.alpha * self.last_y + self.alpha * (x - self.last_x)
+        self.last_x = x
+        self.last_y = y
+        return y
+    
+    def clear_state(self):
+        """
+        Set the internal state of the filter to zero
+        and detach from current graph.
+        """
+        self.alpha = 1 / (2 * np.pi * self.dt * self.fc + 1)
+        self.last_x = torch.zeros(*self.last_x.shape)
+        self.last_y = torch.zeros(*self.last_y.shape)
+
+    def detach(self):
+        """
+        Hold the internal state of the filter
+        and detach from current graph.
+        """
+        self.alpha = self.alpha.detach()
+        self.last_x = self.last_x.detach()
+        self.last_y = self.last_y.detach()
+
+
+class Diff:
+    """
+    Calculate the backward difference
+    x'[n] = x[n] - x[n - 1]
+    of a signal x[n] along its last dimension.
+    This differentiation filter holds its state and is initialized to zero.
+    """
+    def __init__(self, batch_size, n_channels):
+        self.last_x = torch.zeros((batch_size, n_channels, 1))
+    
+    def __call__(self, x):
+        """
+        x: torch.tensor of shape [bacth_size, n_channels, n_samples]
+        """
+        x_del = torch.cat((self.last_x, x[..., : -1]), dim=-1)
+        x_diff = x - x_del
+        self.last_x = x[..., -1].unsqueeze(-1)
+        return x_diff
 
 def frequencies_sigmoid(freqs: torch.Tensor,
                         depth: int = 1,
