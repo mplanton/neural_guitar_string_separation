@@ -10,8 +10,8 @@ import numpy as np
 import scipy.signal
 import math
 
-import processors
-import core, spectral_ops
+from ddsp import processors
+from ddsp import core, spectral_ops
 
 import matplotlib.pyplot as plt
 
@@ -838,6 +838,12 @@ class KarplusStrong(processors.Processor):
         self.lp = core.SimpleLowpass(batch_size=batch_size,
                                      n_filters=n_strings,
                                      sr=sample_rate)
+        # DC blocking Highpass
+        self.hp = core.SimpleHighpass(batch_size=batch_size,
+                                      n_filters=n_strings,
+                                      sr=sample_rate)
+        hp_fc = 5
+        self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
         
         # Excitation
         self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
@@ -860,17 +866,14 @@ class KarplusStrong(processors.Processor):
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
             f0_hz: Fundamental frequencies in Hertz,
-                   torch.tensor of shape [batch_size, n_strings, n_frames, 1]
+                   torch.tensor of shape [batch_size, n_strings, n_frames]
             fc:    Loop filter cutoff frequency in Hertz,
-                   torch.tensor of shape [batch_size, n_strings, n_frames, 1]
+                   torch.tensor of shape [batch_size, n_strings, n_frames]
             on_offsets: Note onsets and offsets encoded as
                    0 -> 1 note onset
                    1 -> 0 offset
-                   torch.tensor of shape [batch_size, n_strings, n_frames, 1]
+                   torch.tensor of shape [batch_size, n_strings, n_frames]
         """
-        assert len(f0_hz.shape) == 4
-        assert len(fc.shape) == 4
-        assert len(on_offsets.shape) == 4
         assert f0_hz.shape == fc.shape and fc.shape == on_offsets.shape, \
             "Shapes of f0_hz, fc and on_offsets must be equal, but shapes " \
             f"of f0_hz: {f0_hz.shape}, fc {fc.shape}, on_offsets: {on_offsets.shape}"
@@ -878,7 +881,6 @@ class KarplusStrong(processors.Processor):
         
         # Distinguish onsets = 1 from offsets = -1
         # Differentiate the on_offsets gate signal
-        on_offsets = on_offsets.squeeze(-1)
         on_offsets = self.diff(on_offsets)
         end = torch.zeros((self.batch_size, self.n_strings, 1))
         on_offsets = torch.cat((on_offsets, end), dim=-1)
@@ -889,7 +891,6 @@ class KarplusStrong(processors.Processor):
         onset_frame_indices = torch.nonzero(onsets, as_tuple=False)
         
         # If note is off, stay at last valid fundamental frequency.
-        f0_hz = f0_hz.squeeze(-1)
         for batch in range(self.batch_size):
             for string in range(self.n_strings):
                 for frame in range(n_frames):
@@ -902,9 +903,6 @@ class KarplusStrong(processors.Processor):
         t0s = core.safe_divide(1, f0_hz)
         # Limit fundamental period to maximum delay
         t0s [t0s > self.max_delay] = self.max_delay
-
-        # Cutoff frequencies        
-        fc = fc.squeeze(-1)
         
         return {"t0s": t0s,
                 'fcs': fc,
@@ -927,7 +925,7 @@ class KarplusStrong(processors.Processor):
         
         Returns:
             The synthesized example of string sounds from the given parameters,
-            torch.tensor of shape [batch_size, n_strings, n_samples, 1]
+            torch.tensor of shape [batch_size, n_strings, n_samples]
         """
         # Build excitations for the training example.
         excitation_block = torch.zeros((self.batch_size, self.n_strings,
@@ -961,8 +959,8 @@ class KarplusStrong(processors.Processor):
             # Synthesize one frame of audio
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
-                f = self.lp(self.dl(last_y))
+                f = self.hp(self.lp(self.dl(last_y)))
                 out[..., offset + i] = excitation_block[..., offset + i] + f
                 last_y = out[..., offset + i]
         
-        return out.unsqueeze(-1)
+        return out

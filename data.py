@@ -918,8 +918,31 @@ def debugEvalGuitarset():
     #pbar = tqdm.tqdm(test_set)
     for d in pbar:
         print(d)
+
+def testGuitarsetCompareFile():
+    from torch.utils.data import DataLoader
+    import scipy.io.wavfile as wavfile
+    batch_size = 2
+    ds = Guitarset(dataset_range=(0, 4),
+                   style='comp',
+                   genres=['bn'],
+                   allowed_strings=[1, 2, 3, 4, 5, 6],
+                   shuffle_files=False)
+    loader = iter(DataLoader(ds, batch_size=batch_size, shuffle=False))
     
+    out_mix = []
+    out_sources = []
+    for mix, freqs, sources in loader:
+        out_mix.append(mix)
+        out_sources.append(torch.transpose(sources, 2, 1))
+    
+    out_mix = torch.cat(out_mix[:-1], dim=-1)
+    out_sources = torch.cat(out_sources[:-1], dim=-1)
+    
+    for batch in range(batch_size):
+        wavfile.write(f"{batch}_test_mix.wav", rate=16000, data=out_mix[batch].squeeze().numpy())
+        wavfile.write(f"{batch}_test_sources.wav", rate=16000, data=out_sources[batch].squeeze().T.numpy())
 
 if __name__ == "__main__":
-    debugEvalGuitarset()
-    
+    #debugEvalGuitarset()
+    testGuitarsetCompareFile()

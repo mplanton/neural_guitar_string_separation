@@ -56,7 +56,7 @@ Resume training with:
 
 ## Inference
 
-    python inference.py --tag 'TAG' --test-set CSD --song_name 'El Rossinyol'
+    python inference.py --tag 'TAG' --test-set CSD --song-name 'El Rossinyol'
     python inference.py --tag 'TAG' --test-set Guitarset --song-name '05_SS3-98-C_comp_hex_cln'
 
 ## Acknowledgment
