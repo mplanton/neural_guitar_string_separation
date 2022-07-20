@@ -643,6 +643,8 @@ class Guitarset(torch.utils.data.IterableDataset):
     The Dataset is empty when the first end of a stream of audio files is reached.
     This dataset loads examples separately from disk.
     
+    Currently this does NOT support muti process loading with multiple workers!
+    So make shure to set `num_workers` to 0 or 1 in the DataLoader.
     
     The Guitarset is a dataset of single string classical guitar recordings featuring
         * 5 different musical genres: Bossa Nova, Funk, Jazz, Rock, Singer Songwriter
@@ -655,6 +657,7 @@ class Guitarset(torch.utils.data.IterableDataset):
     tracking with Cuesta.
     
     Args:
+        batch_size: int, batch size of the loaded data.
         dataset_range: tuple of int, (start_track, stop_track).
             Specify the range of recordings per style and genre to use from the dataset.
             There are up to 36 recordings per style and genre available.
@@ -1140,9 +1143,9 @@ def testGuitarsetCompareFile():
                    style='solo',
                    genres=['ss'],
                    allowed_strings=[1, 2, 3, 4, 5, 6],
-                   shuffle_files=True)
-    # Bathcing is done in the Guitarset, hence set batch_size=None in the DataLoader.
-    loader = DataLoader(ds, batch_size=None, shuffle=False)
+                   shuffle_files=False)
+    # Batching is done in the Guitarset, hence set batch_size=None in the DataLoader.
+    loader = DataLoader(ds, batch_size=None, shuffle=False, num_workers=1)
     
     out_mix = []
     out_sources = []

@@ -1408,7 +1408,7 @@ class SimpleLowpass:
         Set the internal state of the filter to zero
         and detach from current graph.
         """
-        self.alpha = (2 * np.pi * self.dt * self.fc) / (2 * np.pi * self.dt * self.fc + 1)
+        self.alpha = self.alpha.detach()
         self.last_y = torch.zeros(*self.last_y.shape)
 
     def detach(self):
@@ -1471,7 +1471,7 @@ class SimpleHighpass:
         Set the internal state of the filter to zero
         and detach from current graph.
         """
-        self.alpha = 1 / (2 * np.pi * self.dt * self.fc + 1)
+        self.alpha = self.alpha.detach()
         self.last_x = torch.zeros(*self.last_x.shape)
         self.last_y = torch.zeros(*self.last_y.shape)
 
@@ -1503,6 +1503,20 @@ class Diff:
         x_diff = x - x_del
         self.last_x = x[..., -1].unsqueeze(-1)
         return x_diff
+    
+    def clear_state(self):
+        """
+        Set the internal state to zero
+        and detach from current graph.
+        """
+        self.last_x = torch.zeros(*self.last_x.shape)
+
+    def detach(self):
+        """
+        Hold the internal state and detach from current graph.
+        """
+        self.last_x = self.last_x.detach()
+
 
 def frequencies_sigmoid(freqs: torch.Tensor,
                         depth: int = 1,

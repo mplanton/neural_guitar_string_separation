@@ -547,7 +547,7 @@ class TestGuitarModel(_Model):
     batch_size: training batch size
     sample_rate: audio sample rate
     n_fft: FFT length in samples
-    fft_hop_size: hop size of the FFT in samples
+    fft_hop_size: hop size of the FFT in samples (must also be CREPE pitch tracking hop size)
     n_samples: length of the train examples in samples
     n_strings: number of strings to model
     """
@@ -559,6 +559,14 @@ class TestGuitarModel(_Model):
                  n_samples=64000,
                  n_strings=6):
         super().__init__()
+        
+        self.batch_size = batch_size
+        self.sample_rate = sample_rate
+        self.n_fft = n_fft
+        self.frame_size = fft_hop_size
+        self.n_samples = n_samples
+        self.n_strings = n_strings
+        
         self.ks = synths.KarplusStrong(batch_size=batch_size,
                                       n_samples=n_samples,
                                       sample_rate=sample_rate,
@@ -568,13 +576,19 @@ class TestGuitarModel(_Model):
                                       excitation_length=0.005)
     
     def forward(self, mix, f0_hz):
-        """f0s and fcs of shape [batch_size, n_strings, n_frames, 1]"""
+        """f0s and fcs of shape [batch_size, n_strings, n_frames]"""
         # Onsets and offsets are analyzed from f0 by now.
         on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
                                               torch.tensor(0., device=f0_hz.device))
         
-        fc = 5500
-        fcs = torch.ones_like(f0_hz) * fc
+        # Artificial time variable fc at frame rate
+        dur = self.n_samples / self.sample_rate
+        t = torch.linspace(0, dur, f0_hz.shape[2])
+        t = t.unsqueeze(0).repeat(self.n_strings, 1).unsqueeze(0).repeat(self.batch_size, 1, 1)
+        f = 1
+        a = 2000
+        lfo = torch.sin(2 * np.pi * f * t)
+        fcs = 2100 + a * lfo
         
         sources = self.ks(f0_hz=f0_hz, fc=fcs, on_offsets=on_offsets)
         return sources
@@ -585,17 +599,18 @@ if __name__ == "__main__":
     import data
     import scipy.io.wavfile as wavfile
     
-    batch_size = 2
+    batch_size = 1
     example_length = 64000
+    conf_thresh = 0.4
     
     ds = data.Guitarset(
         batch_size=batch_size,
-        dataset_range=(0, 2),
+        dataset_range=(0, 1),
         style='comp',
-        genres=['bn', 'ss'],
+        genres=['bn'],
         allowed_strings=[1, 2, 3],
         shuffle_files=False,
-        conf_threshold=0.4,
+        conf_threshold=conf_thresh, # Influences On/Offsets
         example_length=example_length,
         return_name=True, # Returns file name
         f0_from_mix=False,
@@ -622,11 +637,11 @@ if __name__ == "__main__":
     out_pred_sources = torch.cat(out_pred_sources, dim=-1)
     for batch in range(batch_size):
         for string in range(out_pred_sources.shape[1]):
-            wavfile.write(f"KS_prediction_batch_{batch}_string_{string}.wav", 16000,
+            wavfile.write(f"KS_prediction_batch_{batch}_string_{string}_conf_{conf_thresh}.wav", 16000,
                           out_pred_sources[batch, string].numpy())
     
     out_target_sources = torch.cat(out_target_sources, dim=-1)
     for batch in range(batch_size):
         for string in range(out_target_sources.shape[1]):
-            wavfile.write(f"KS_target_batch_{batch}_string_{string}.wav", 16000,
+            wavfile.write(f"KS_target_batch_{batch}_string_{string}_conf_{conf_thresh}.wav", 16000,
                           out_target_sources[batch, string].numpy())

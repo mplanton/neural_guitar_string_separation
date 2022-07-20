@@ -10,8 +10,10 @@ import numpy as np
 import scipy.signal
 import math
 
-from ddsp import processors
-from ddsp import core, spectral_ops
+#from ddsp import processors
+#from ddsp import core, spectral_ops
+import processors
+import core, spectral_ops
 
 import matplotlib.pyplot as plt
 
@@ -860,6 +862,15 @@ class KarplusStrong(processors.Processor):
         
         self.diff = core.Diff(batch_size=batch_size, n_channels=n_strings)
         self.last_valid_f0 = torch.ones((batch_size, n_strings)) * min_freq
+        
+        # Internal state of the synth
+        self.internal_state = [
+                self.dl,
+                self.lp,
+                self.hp,
+                self.diff,
+                self.last_valid_f0
+            ]
     
     def get_controls(self, f0_hz, fc, on_offsets):
         """
@@ -872,6 +883,7 @@ class KarplusStrong(processors.Processor):
             on_offsets: Note onsets and offsets encoded as
                    0 -> 1 note onset
                    1 -> 0 offset
+                   It behaves like a gate signal.
                    torch.tensor of shape [batch_size, n_strings, n_frames]
         """
         assert f0_hz.shape == fc.shape and fc.shape == on_offsets.shape, \
@@ -962,5 +974,22 @@ class KarplusStrong(processors.Processor):
                 f = self.hp(self.lp(self.dl(last_y)))
                 out[..., offset + i] = excitation_block[..., offset + i] + f
                 last_y = out[..., offset + i]
-        
         return out
+
+    def clear_state(self):
+        """
+        Set the internal state of the synth to zero
+        and detach from current graph.
+        """
+        for element in self.internal_state:
+            if type(element) == torch.Tensor or type(element) == torch.tensor:
+                element = torch.zeros(*element.shape)
+            else:
+                element.clear_state()
+    
+    def detach(self):
+        """
+        Detach from current graph and hold the internal state of the synth.
+        """
+        for element in self.internal_state:
+            element.detach()

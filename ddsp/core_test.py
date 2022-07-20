@@ -180,34 +180,6 @@ class TestCore(unittest.TestCase):
         mean_difference = abs(difference).mean()
         self.assertLessEqual(mean_difference, threshold)
         
-    
-    #TODO: this may not be needed............
-    def test_queue(self):
-        # Test Queue class
-        threshold = 1e-5
-        batch_size = 4
-        channel_size = 6
-        length_size = 100
-        sig_len = 80
-        
-        sig1 = torch.rand((batch_size, channel_size, sig_len))
-        sig2 = 0.5 * torch.rand((batch_size, channel_size, sig_len))
-
-        queue = core.Queue(batch_size, channel_size, length_size)
-        queue.write(sig1)
-        
-        out = queue.read(sig_len)
-        difference = sig1.numpy() - out.numpy()
-        mean_difference = abs(difference).mean()
-        self.assertLessEqual(mean_difference, threshold)
-        
-        queue.write(sig2)
-        
-        out = queue.read(sig_len)
-        difference = sig2.numpy() - out.numpy()
-        mean_difference = abs(difference).mean()
-        self.assertLessEqual(mean_difference, threshold)
-        
 
 if __name__ == '__main__':
     #test = TestCore()
