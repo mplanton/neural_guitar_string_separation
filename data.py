@@ -15,6 +15,7 @@ import os
 import pickle
 import csv
 import itertools
+import math
 
 import utils
 import ddsp.core
@@ -631,7 +632,215 @@ class BCBQDataSets(torch.utils.data.Dataset):
         else: return mix, frequencies, sources
 
 
-class Guitarset(torch.utils.data.Dataset):
+
+class Guitarset(torch.utils.data.IterableDataset):
+    """
+    Generate `batch_size` parallel audio examples of length `n_samples`.
+    The dataset groups the given audio files dynamically in batches and
+    aranges them consecutively.
+    The batching is done here so set `batch_size=None` in the DataLoader!
+    The Dataset returns torch.tensor of shape [batch_size, n_sources, n_samples]
+    The Dataset is empty when the first end of a stream of audio files is reached.
+    This dataset loads examples separately from disk.
+    
+    
+    The Guitarset is a dataset of single string classical guitar recordings featuring
+        * 5 different musical genres: Bossa Nova, Funk, Jazz, Rock, Singer Songwriter
+        * 2 different playing styles
+    There are 36 recordings per style and genre, which makes a total of 360
+    recordings with an average duration of 30 seconds.
+    
+    The dataset is expected to have a sample rate of 16kHz and f0 information
+    must be provided via single f0 tracking with CREPE or via multiple f0
+    tracking with Cuesta.
+    
+    Args:
+        dataset_range: tuple of int, (start_track, stop_track).
+            Specify the range of recordings per style and genre to use from the dataset.
+            There are up to 36 recordings per style and genre available.
+            This allows for specifying unique datasets, i.e. for training set and validation set,
+            by using different dataset ranges.
+        style: str, 'comp', 'solo' or 'all'.
+            Playing styles are comping, solo playing or both styles.
+        genres: list of str, list of musical genres from ['bn', 'funk', 'jazz', 'rock', 'ss'].
+            bn = Bossa Nova, ss = Singer Songwriter
+        allowed_strings: list of int, List of string numbers representing the sources
+            (from high to low).
+            1 = higher E, 2 = B, 3 = G, 4 = D, 5 = A, 6 = lower E
+        shuffle_files: bool, If True, the recordings order is randomized per epoch.
+        conf_threshold: float, threshold on CREPE confidence value to differentiate between voiced/unvoiced frames
+        example_length: int, Length of the audio examples in samples.
+        return_name: bool, If True, the names of the audio examples are returned (composed of title and string-number).
+        f0_from_mix: bool, If True, use Cuesta multiple f0 tracker data, if False use
+            CREPE single f0 tracker data as frequency information.
+        cunet_original: bool, Set to True, if using the CU-Net original.
+        file_list: list, If a list of files is present, the used files for the dataset are not specified by the `dataset_range`, but by this list.
+    
+    """
+    def __init__(self,
+                 batch_size,
+                 dataset_range=(0, 36),
+                 style='comp',
+                 genres=['bn', 'funk', 'jazz', 'rock', 'ss'],
+                 allowed_strings=[1, 2, 3, 4, 5, 6],
+                 shuffle_files=True,
+                 conf_threshold=0.4,
+                 example_length=64000,
+                 return_name=False,
+                 f0_from_mix=False,
+                 cunet_original=False,
+                 file_list=False,
+                 normalize_mix=True,
+                 normalize_sources=True):
+        super(Guitarset).__init__()
+        
+        # Check arguments
+        assert len(dataset_range) == 2, "dataset_range must be a tuple of length 2!"
+        assert style.lower() in ['comp', 'solo', 'all'], f"{style} is not a valid option for playing style!"
+        assert len(genres) > 0, "List of musical genres must at least contain one genre!"
+        assert len(allowed_strings) > 0, "List of allowed strings must at least contain one string number!"
+        
+        self.sample_rate = 16000
+        # Audio example offset correction in milliseconds.
+        # Gets added to frame start.
+        self.crepe_hop_size = 256 # CREPE hopsize is 16ms in samples
+        self.n_frames = math.ceil(example_length / self.crepe_hop_size)
+        self.crepe_dir = "../Datasets/Guitarset/crepe_f0_center/"
+        self.batch_size = batch_size
+        self.dataset_range = dataset_range
+        self.style = style.lower()
+        self.genres = genres
+        self.conf_threshold = conf_threshold
+        self.example_length = example_length # Length of the examples in samples
+        self.allowed_strings = sorted(allowed_strings)
+        # Channel indices are reversed since string 1 is highest and 6 lowest.
+        self.channel_indices = np.array(self.allowed_strings[::-1]) - 1
+        self.n_sources = len(allowed_strings)
+        self.f0_cuesta_dir = f"../Datasets/Guitarset/mixtures_{self.n_sources}_sources/mf0_cuesta_processed"
+        self.return_name = return_name
+        self.f0_from_mix = f0_from_mix
+        self.cunet_original = cunet_original
+        self.shuffle_files = shuffle_files
+        self.file_list = file_list
+        self.normalize_mix = normalize_mix
+        self.normalize_sources = normalize_sources
+        
+        # Sort and filter file paths.
+        # Paths have to be sorted first to get distinct datasets from files
+        # (train, valid, test).
+        audio_files = sorted(glob.glob("../Datasets/Guitarset/audio_16kHz/*.wav"))
+        
+        # Filter audio file paths to selection.
+        if not file_list:
+            if style != 'all':
+                audio_files = [path for path in audio_files if style in path]
+            self.audio_files = []
+            for genre in self.genres:
+                start = dataset_range[0]
+                stop = dataset_range[1]
+                self.audio_files += [path for path in audio_files if genre.lower() in path.lower()][start:stop]
+        else:
+            self.audio_files = self.file_list
+        
+        assert len(self.audio_files) >= batch_size, \
+            "The number of audio files in the dataset must at least be the batch_size!" \
+            + f"\nThe batch_size is {batch_size} and number of audio files is {len(self.audio_files)}."
+        
+        # Randomize filtered file paths.
+        if self.shuffle_files == True:
+            random.shuffle(self.audio_files)
+
+        # Current audio file paths to be loaded
+        self.current_paths = self.audio_files[:batch_size]
+        # Index for loading new audio files
+        self.path_idx = batch_size
+        # Current file offsets
+        self.offsets = batch_size * [0]
+        
+
+    def load_sources(self, batch):
+        audio_file_path = self.current_paths[batch]
+        offset = self.offsets[batch]
+        audio, sr = torchaudio.load(audio_file_path, offset=offset,
+                                    num_frames=self.example_length)
+        return audio[self.channel_indices] # [n_sources, n_samples]
+
+
+    def load_frequencies(self, batch):
+        name = self.current_paths[batch].split('/')[-1].split('.')[0]
+        sample_offset = self.offsets[batch]
+        offset = int(sample_offset / self.crepe_hop_size)
+        
+        if not self.f0_from_mix:
+            # Load CREPE frequency
+            confidence_file = os.path.join(self.crepe_dir, name + "_confidence.npy")
+            f0_file = os.path.join(self.crepe_dir, name + "_frequency.npy")
+            confidences = np.load(confidence_file)
+            confidences = confidences[self.channel_indices, offset : offset + self.n_frames]
+            frequency = np.load(f0_file)
+            frequency = frequency[self.channel_indices, offset : offset + self.n_frames]
+            frequency = np.where(confidences < self.conf_threshold, 0, frequency)
+            frequencies = torch.from_numpy(frequency).type(torch.float32) # [n_sources, n_frames]
+        else:
+            # Load cuesta frequency
+            f0_from_mix_file = os.path.join(self.f0_cuesta_dir, + name + '.pt')
+            frequencies = torch.load(f0_from_mix_file)[offset : offset + self.n_frames, :]
+        return frequencies # [n_sources, n_frames]
+
+    def __iter__(self):
+        """Yields: mix, frequencies, sources
+            mix: [batch_size, example_length] Mixture signal.
+            frequencies: [batch_size, n_frames, n_sources] Sources fundamental frequencies.
+            sources: [batch_size, example_length, n_sources] Source signals.
+        """
+        stop = False
+        while stop == False:
+            # Initialize batch with zeros for zero padding.
+            sources = torch.zeros((self.batch_size, self.n_sources, self.example_length))
+            frequencies = torch.zeros((self.batch_size, self.n_sources, self.n_frames))
+            
+            for batch in range(self.batch_size):
+                # Load sources
+                audio = self.load_sources(batch)
+                audio_len = audio.shape[-1]
+                sources[batch, :, : audio_len] = audio
+                
+                # Make mix and normalize
+                mix = torch.sum(sources, dim=1)  # [batch_size, n_samples]
+                if self.normalize_mix == True:
+                    mix_max = mix.abs().max()
+                    mix = mix / mix_max
+                if self.normalize_sources == True:
+                    mix_max = mix.abs().max() # TODO: Make this more sophisticated...
+                    sources = sources / mix_max  # [batch_size, n_sources, n_samples]
+                
+                # Load frequencies
+                freqs = self.load_frequencies(batch)
+                freqs_len = freqs.shape[-1]
+                frequencies[batch, :, : freqs_len] = freqs
+                
+                # House keeping
+                self.offsets[batch] += audio_len
+                if audio_len < self.example_length:
+                    if self.path_idx >= len(self.audio_files):
+                        stop = True
+                        break
+                    # Get new file
+                    self.current_paths[batch] = self.audio_files[self.path_idx]
+                    self.path_idx += 1
+                    self.offsets[batch] = 0
+            
+            sources = torch.transpose(sources, 1, 2) # [batch_size, n_samples, n_sources]
+            frequencies = torch.transpose(frequencies, 1, 2) # [batch_size, n_frames, n_sources]
+            if self.return_name:
+                names = [name.split('/')[-1].split('.')[0] for name in self.current_paths]
+                yield mix, frequencies, sources, names, self.allowed_strings
+            else:
+                yield mix, frequencies, sources
+
+
+
+class GuitarsetOld(torch.utils.data.Dataset):
     """
     The Guitarset is a dataset of single string classical guitar recordings featuring
         * 5 different musical genres: Bossa Nova, Funk, Jazz, Rock, Singer Songwriter
@@ -862,24 +1071,27 @@ def plot_channels(channels, batch_num, allowed_strings, title=""):
         axs[i].plot(channels[batch_num, :, i].numpy())
         axs[i].set_ylabel("string" + str(allowed_strings[i]))
     plt.show()
+    return fig
 
 def testGuitarset():
+    batch_size = 4
     # Testing function.
-    ds = Guitarset(dataset_range=(0, 36),
-                   style='comp',
-                   genres=['bn', 'funk', 'jazz', 'rock', 'ss'],
-                   allowed_strings=[1, 2, 3, 4, 5, 6],
-                   shuffle_files=False)
-    print()
+    ds = Guitarset(batch_size=batch_size,
+                    dataset_range=(0, 8),
+                    style='comp',
+                    genres=['bn'],
+                    allowed_strings=[1, 2, 3, 4, 5, 6],
+                    shuffle_files=False)
+
     from torch.utils.data import DataLoader
-    loader = iter(DataLoader(ds, batch_size=16, shuffle=False))
+    loader = iter(DataLoader(ds, batch_size=None, shuffle=False))
     mix, freqs, sources = next(loader)
 
-    for batch_num in range(16):    
-        plot_channels(sources, batch_num, ds.allowed_strings, "Sources" + str(batch_num))
+    for batch in range(batch_size):    
+        plot_channels(sources, batch, ds.allowed_strings, "Sources" + str(batch))
         
         # Plot freqs
-        plot_channels(freqs, batch_num, ds.allowed_strings, "Freqs" + str(batch_num))
+        plot_channels(freqs, batch, ds.allowed_strings, "Freqs" + str(batch))
 
 def debugEvalGuitarset():
     import models
@@ -923,26 +1135,36 @@ def testGuitarsetCompareFile():
     from torch.utils.data import DataLoader
     import scipy.io.wavfile as wavfile
     batch_size = 2
-    ds = Guitarset(dataset_range=(0, 4),
-                   style='comp',
-                   genres=['bn'],
+    ds = Guitarset(batch_size=batch_size,
+                   dataset_range=(0, 4),
+                   style='solo',
+                   genres=['ss'],
                    allowed_strings=[1, 2, 3, 4, 5, 6],
-                   shuffle_files=False)
-    loader = iter(DataLoader(ds, batch_size=batch_size, shuffle=False))
+                   shuffle_files=True)
+    # Bathcing is done in the Guitarset, hence set batch_size=None in the DataLoader.
+    loader = DataLoader(ds, batch_size=None, shuffle=False)
     
     out_mix = []
     out_sources = []
+    out_freqs = []
     for mix, freqs, sources in loader:
         out_mix.append(mix)
-        out_sources.append(torch.transpose(sources, 2, 1))
+        out_sources.append(sources)
+        out_freqs.append(freqs)
     
-    out_mix = torch.cat(out_mix[:-1], dim=-1)
-    out_sources = torch.cat(out_sources[:-1], dim=-1)
+    out_mix = torch.cat(out_mix, dim=1)
+    out_sources = torch.cat(out_sources, dim=1)
+    out_sources = torch.transpose(out_sources, 1, 2)
+    out_freqs = torch.cat(out_freqs, dim=1)
+    #out_freqs = torch.transpose(out_freqs, 1, 2)
     
     for batch in range(batch_size):
         wavfile.write(f"{batch}_test_mix.wav", rate=16000, data=out_mix[batch].squeeze().numpy())
         wavfile.write(f"{batch}_test_sources.wav", rate=16000, data=out_sources[batch].squeeze().T.numpy())
+        fig = plot_channels(out_freqs, batch, ds.allowed_strings, f"Batch {batch} sources f0")
+        fig.savefig(f"{batch}_test_sources_f0.png", dpi=300)
 
 if __name__ == "__main__":
     #debugEvalGuitarset()
+    #testGuitarset()
     testGuitarsetCompareFile()

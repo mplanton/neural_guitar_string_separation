@@ -540,17 +540,93 @@ class BaselineUnet(_Model):
         else:
             return y_hat
 
-
+class TestGuitarModel(_Model):
+    """
+    Test guitar set model to test the KarplusStrong physical modeling synthesis.
+    
+    batch_size: training batch size
+    sample_rate: audio sample rate
+    n_fft: FFT length in samples
+    fft_hop_size: hop size of the FFT in samples
+    n_samples: length of the train examples in samples
+    n_strings: number of strings to model
+    """
+    def __init__(self,
+                 batch_size,
+                 sample_rate=16000,
+                 n_fft=512,
+                 fft_hop_size=256,
+                 n_samples=64000,
+                 n_strings=6):
+        super().__init__()
+        self.ks = synths.KarplusStrong(batch_size=batch_size,
+                                      n_samples=n_samples,
+                                      sample_rate=sample_rate,
+                                      audio_frame_size=fft_hop_size,
+                                      n_strings=n_strings,
+                                      min_freq=20,
+                                      excitation_length=0.005)
+    
+    def forward(self, mix, f0_hz):
+        """f0s and fcs of shape [batch_size, n_strings, n_frames, 1]"""
+        # Onsets and offsets are analyzed from f0 by now.
+        on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
+                                              torch.tensor(0., device=f0_hz.device))
+        
+        fc = 5500
+        fcs = torch.ones_like(f0_hz) * fc
+        
+        sources = self.ks(f0_hz=f0_hz, fc=fcs, on_offsets=on_offsets)
+        return sources
+    
 if __name__ == "__main__":
     torch.random.manual_seed(0)
-    # model = SourceFilterMixtureAutoencoder2(harmonic_roll_off=-2, estimate_noise_mag=True, bidirectional=False)
-    # audio = torch.rand((16, 64000))
-    # f0 = torch.rand((16, 125, 2))
-    # out = model(audio, f0)
-    # print(out.shape)
-
-    model = BaselineUnet(n_fft=1024, n_hop=256, original=True)
-    mix = torch.rand((16, 64000))
-    info = torch.rand((16, 254, 1)) * 500
-    out = model((mix, info))
-    print(out.shape)
+    
+    import data
+    import scipy.io.wavfile as wavfile
+    
+    batch_size = 2
+    example_length = 64000
+    
+    ds = data.Guitarset(
+        batch_size=batch_size,
+        dataset_range=(0, 2),
+        style='comp',
+        genres=['bn', 'ss'],
+        allowed_strings=[1, 2, 3],
+        shuffle_files=False,
+        conf_threshold=0.4,
+        example_length=example_length,
+        return_name=True, # Returns file name
+        f0_from_mix=False,
+        cunet_original=False,
+        file_list=False)
+    
+    loader = torch.utils.data.DataLoader(ds, batch_size=None, shuffle=False)
+    
+    model = TestGuitarModel(batch_size=batch_size,
+                            n_samples=example_length,
+                            n_strings=3)
+    
+    out_pred_sources = []
+    out_target_sources = []
+    for mix, freqs, sources, f_name, _ in loader:
+        print("Processing examples from ", f_name)
+        
+        freqs = freqs.permute(0, 2, 1)
+        target_sources = sources.permute(0, 2, 1)
+        predicted_sources = model(mix=mix, f0_hz=freqs)
+        out_pred_sources.append(predicted_sources)
+        out_target_sources.append(target_sources)
+    
+    out_pred_sources = torch.cat(out_pred_sources, dim=-1)
+    for batch in range(batch_size):
+        for string in range(out_pred_sources.shape[1]):
+            wavfile.write(f"KS_prediction_batch_{batch}_string_{string}.wav", 16000,
+                          out_pred_sources[batch, string].numpy())
+    
+    out_target_sources = torch.cat(out_target_sources, dim=-1)
+    for batch in range(batch_size):
+        for string in range(out_target_sources.shape[1]):
+            wavfile.write(f"KS_target_batch_{batch}_string_{string}.wav", 16000,
+                          out_target_sources[batch, string].numpy())
