@@ -66,6 +66,9 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
         
         loss.backward()
         optimizer.step()
+        # Detach from computation graph, so we do not run out of memory.
+        if args.dataset == "Guitarset":
+            network.detach()
         loss_container.update(loss.item(), f0.size(0))
     return loss_container.avg
 
@@ -160,7 +163,7 @@ def save_model(tag, checkpoint, params, best_loss, valid_loss, target_path):
         outfile.write(json.dumps(params, indent=4, sort_keys=True))
 
 
-def shuffle_songs(train_sampler, valid_Sampler, args):
+def shuffle_songs(train_sampler, valid_sampler, args):
     """
     Shuffle songs by calling the DataLoaders Dataset constructor.
     """
@@ -168,29 +171,37 @@ def shuffle_songs(train_sampler, valid_Sampler, args):
     n_valid_files = int(args.valid_split * args.n_files_per_style_genre)
     
     train_sampler.dataset.__init__(
+        batch_size=args.batch_size,
         dataset_range=(0, n_train_files),
         style=args.style,
         genres=args.genres,
-        allowed_strings=args.strings,
+        allowed_strings=args.allowed_strings,
         shuffle_files=args.shuffle_files,
         conf_threshold=args.confidence_threshold,
         example_length=args.example_length,
         return_name=False,
         f0_from_mix=args.f0_cuesta,
         cunet_original=False,
+        file_list=False,
+        normalize_mix=args.normalize_mix,
+        normalize_sources=args.normalize_sources
     )
     
-    valid_Sampler.dataset.__init__(
+    valid_sampler.dataset.__init__(
+        batch_size=args.batch_size,
         dataset_range=(n_train_files, n_train_files + n_valid_files),
         style=args.style,
         genres=args.genres,
-        allowed_strings=args.strings,
+        allowed_strings=args.allowed_strings,
         shuffle_files=False,
         conf_threshold=args.confidence_threshold,
         example_length=args.example_length,
         return_name=False,
         f0_from_mix=args.f0_cuesta,
-        cunet_original=False)
+        cunet_original=False,
+        file_list=False,
+        normalize_mix=args.normalize_mix,
+        normalize_sources=args.normalize_sources)
 
 
 def main():
@@ -234,6 +245,7 @@ def main():
     # Training Parameters
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--example-length', type=int, default=64000)
     parser.add_argument('--shuffle-examples', type=bool, default=True,
                         help="If True, the audio clips for training (called examples) are shuffeled along the time axis.\n" + \
                              "Set this to False if whole songs should be trained.\n" + \
@@ -355,15 +367,26 @@ def main():
     train_dataset, valid_dataset, args = data.load_datasets(parser, args)
 
     # Make Dataloaders
-    train_sampler = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=args.shuffle_examples,
-        drop_last=True,
-        worker_init_fn=utils.worker_init_fn,
-        **dataloader_kwargs
-    )
-    valid_sampler = torch.utils.data.DataLoader(
-        valid_dataset, batch_size=args.batch_size, **dataloader_kwargs
-    )
+    if args.dataset == "Guitarset":
+        # The Guitarset does batching and file shuffling by its own.
+        train_sampler = torch.utils.data.DataLoader(
+            train_dataset, batch_size=None, shuffle=False,
+            worker_init_fn=utils.worker_init_fn,
+            **dataloader_kwargs
+        )
+        valid_sampler = torch.utils.data.DataLoader(
+            valid_dataset, batch_size=None, **dataloader_kwargs
+        )
+    else:    
+        train_sampler = torch.utils.data.DataLoader(
+            train_dataset, batch_size=args.batch_size, shuffle=args.shuffle_examples,
+            drop_last=True,
+            worker_init_fn=utils.worker_init_fn,
+            **dataloader_kwargs
+        )
+        valid_sampler = torch.utils.data.DataLoader(
+            valid_dataset, batch_size=args.batch_size, **dataloader_kwargs
+        )
 
     # make dict for self supervision loss weights
     ss_weights_dict = {'harmonic_amplitudes': args.harmonic_amp_loss_weight,

@@ -1,0 +1,63 @@
+# ----- GENERAL PARAMETERS ---------------------------
+
+tag: KarplusStrong_ex1
+comment: The KarplusStrong model is trained with the Guitarset (Experiment 1).
+architecture: KarplusStrongAutoencoder
+
+# Base directory to store config and checkpoints
+output = trained_models/KarplusStrong_ex1/
+
+# -------- DATASET PARAMETERS -----------------------
+
+dataset = Guitarset
+n-files-per-style-genre = 10 # from 36
+valid-split = 0.2
+style = comp # from comp, solo or all
+genres = [bn] # from [bn, funk, jazz, rock, ss]
+allowed-strings = [1, 2, 3, 4, 5, 6] # from [1, 2, 3, 4, 5, 6]
+
+example-length = 32000 # default is 64000
+f0-cuesta = False # Use CREPE pitch tracks
+normalize-mix = True
+normalize-sources = False
+
+# -------- TRAINING PARAMETERS -----------------------
+
+epochs = 1000            # Wait for early stopping.
+batch-size = 2           # 2 is CPU setting, approx. ? for GPU
+shuffle-songs = True     # Shuffle the song sequence for every epoch.
+
+lr = 0.0001
+patience = 8             # Early stopping patience
+lr-decay-patience = 80
+lr-decay-gamma = 0.98
+weight-decay = 0.00001
+seed = 4
+nb-workers = 1           # Keep this below 2 since parallel loading is not supported yet.
+quiet = False
+no-cuda = False
+
+supervised = False
+reconstruction-loss-weight = 1
+loss-nfft = [2048, 1024, 512, 256, 128, 64]
+loss-mag-weight = 1
+loss-logmag-weight = 1
+loss-logmel-weight = 0
+loss-delta-freq-weight = 0
+loss-delta-time-weight = 0
+loss-lsf-weight = 0  # LSF regularization loss
+
+
+# -------- MODEL PARAMETERS ------------------------
+
+nfft = 512
+nhop = 256
+
+encoder = MixEncoderSimple
+
+encoder-hidden-size = 256
+embedding-size = 128
+decoder-hidden-size = 512
+decoder-output-size = 512
+unidirectional = True
+

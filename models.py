@@ -204,6 +204,139 @@ class SourceFilterMixtureAutoencoder2(_Model):
         return mix
 
 
+class KarplusStrongAutoencoder(_Model):
+    """
+    Autoencoder that encodes a mixture of n voices into synthesis parameters
+    from which the mixture is re-synthesised. Synthesis of each voice is done
+    with a simple Karplus-Strong model.
+    """
+
+    def __init__(self,
+                 batch_size,
+                 allowed_strings=[1, 2, 3, 4, 5, 6],
+                 sample_rate=16000,
+                 example_length=64000,
+                 fft_size=512,
+                 hop_size=256,
+                 encoder_hidden_size=256,
+                 embedding_size=128,
+                 decoder_hidden_size=512,
+                 decoder_output_size=512,
+                 bidirectional=True,
+                 return_sources=False,
+                 return_fc=False):
+        super().__init__()
+
+        # attributes
+        self.batch_size = batch_size
+        self.allowed_strings = allowed_strings
+        self.sample_rate = sample_rate
+        self.fft_size = fft_size
+        self.hop_size = hop_size
+        self.return_sources = return_sources
+        self.return_fc = return_fc
+
+        # neural networks
+        overlap = hop_size / fft_size
+
+        self.encoder = nc.MixEncoderSimple(fft_size=fft_size,
+                                           overlap=overlap,
+                                           hidden_size=encoder_hidden_size,
+                                           embedding_size=embedding_size,
+                                           n_sources=len(allowed_strings),
+                                           bidirectional=bidirectional)
+
+        self.decoder = nc.SynthParameterDecoderSimple(z_size=embedding_size,
+                                            hidden_size=decoder_hidden_size,
+                                            output_size=decoder_output_size,
+                                            bidirectional=bidirectional)
+        
+        # synth
+        self.ks_synth = synths.KarplusStrong(batch_size=batch_size,
+                                            n_samples=example_length,
+                                            sample_rate=sample_rate,
+                                            audio_frame_size=hop_size,
+                                            n_strings=len(allowed_strings),
+                                            min_freq=20,
+                                            excitation_length=0.005)
+        
+        self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
+
+    @classmethod
+    def from_config(cls, config: dict):
+        keys = config.keys()
+        batch_size = config['batch_size'] if 'batch_size' in keys else 1
+        allowed_strings = config['allowed_strings'] if 'allowed_strings' in keys else [1, 2, 3, 4, 5, 6]
+        sample_rate = config['sample_rate'] if 'sample_rate' in keys else 16000
+        example_length = config['example_length'] if 'example_length' in keys else 64000
+        encoder_hidden_size = config['encoder_hidden_size'] if 'encoder_hidden_size' in keys else 256
+        embedding_size = config['embedding_size'] if 'embedding_size' in keys else 128
+        decoder_hidden_size = config['decoder_hidden_size'] if 'decoder_hidden_size' in keys else 512
+        decoder_output_size = config['decoder_output_size'] if 'decoder_output_size' in keys else 512
+        bidirectional = not config['unidirectional'] if 'unidirectional' in keys else True
+        return_sources = config['return_sources'] if 'return_sources' in keys else False
+        return_fc = config['return_fc'] if 'return_fc' in keys else False
+        
+        return cls(batch_size=batch_size,
+                   allowed_strings=allowed_strings,
+                   sample_rate=sample_rate,
+                   example_length=example_length,
+                   fft_size=config['nfft'],
+                   hop_size=config['nhop'],
+                   encoder_hidden_size=encoder_hidden_size,
+                   embedding_size=embedding_size,
+                   decoder_hidden_size=decoder_hidden_size,
+                   decoder_output_size=decoder_output_size,
+                   bidirectional=bidirectional,
+                   return_sources=return_sources,
+                   return_fc=return_fc)
+
+    def forward(self, mix_in, f0_hz, return_fc=False):
+        # audio [batch_size, n_samples]
+        # f0_hz [batch_size, n_freq_frames, n_sources]
+        
+        mix_in = mix_in.squeeze(dim=1)
+        
+        z = self.encoder(mix_in, f0_hz)  # [batch_size, n_frames, n_sources, embedding_size]
+        batch_size, n_frames, n_sources, embedding_size = z.shape
+        z = z.permute(0, 2, 1, 3)
+        z = z.reshape((batch_size*n_sources, n_frames, embedding_size))
+
+
+        f0_hz = f0_hz.transpose(1, 2)  # [batch_size, n_sources, n_freq_frames]
+        f0_hz_dec = torch.reshape(f0_hz, (batch_size*n_sources, -1))  # [batch_size * n_sources, n_freq_frames]
+        f0_hz_dec = f0_hz_dec.unsqueeze(-1)
+        
+        x = self.decoder(f0_hz=f0_hz_dec, z=z)
+        
+        x_fc = self.fc_linear(x)
+        
+        # constrain fc from 0Hz to the half sample rate
+        fc = core.exp_sigmoid(x_fc, max_value=(self.sample_rate / 2))
+        fc = fc.squeeze(-1)
+        fc = torch.reshape(fc, (batch_size, n_sources, n_frames))
+
+        # Onsets and offsets are analyzed from f0 by now.
+        on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
+                                              torch.tensor(0., device=f0_hz.device))
+
+
+        # apply synthesis model
+        sources = self.ks_synth(f0_hz=f0_hz, fc=fc, on_offsets=on_offsets)
+
+        mix_out = torch.sum(sources, dim=1)
+
+        if self.return_sources:
+            return mix_out, sources
+        if self.return_fc:
+            return mix_out, fc
+        return mix_out
+
+    def detach(self):
+        """
+        Detach from computation graph to not run out of RAM.
+        """
+        self.ks_synth.detach()
 
 
 # -------- U-Net Baselines -------------------------------------------------------------------------------------------

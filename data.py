@@ -190,43 +190,54 @@ def load_datasets(parser, args):
                             help="List of genres.\n" +\
                             "'bn', 'funk', 'jazz', 'rock', 'ss'\n" +\
                             "bn = Bossa Nova, ss = Singer Songwriter")
-        parser.add_argument('--strings', type=int, action='store', nargs='*',
+        parser.add_argument('--allowed-strings', type=int, action='store', nargs='*',
                             default=[1, 2, 3, 4, 5, 6], help="List of strings " +\
                             "to use as source signals (from high to low).\n" +\
                             "1 = higher E, 2 = B, 3 = G, 4 = D, 5 = A, 6 = lower E")
         parser.add_argument("--shuffle-files", type=bool, default=True, help=\
                             "If True, the training set file order is randomized.")
         parser.add_argument('--confidence-threshold', type=float, default=0.4)
-        parser.add_argument('--example-length', type=int, default=64000)
         parser.add_argument('--f0-cuesta', action='store_true', default=False)
+        parser.add_argument('--normalize-mix', type=bool, default=True, help=\
+                            "If True, the mix signal is normalized.")
+        parser.add_argument('--normalize-sources', type=bool, default=False, help=\
+                            "If True, the source signals are normalized.")
         args = parser.parse_args()
         
         n_train_files = int((1 - args.valid_split) * args.n_files_per_style_genre)
         n_valid_files = int(args.valid_split * args.n_files_per_style_genre)
         
         train_dataset = Guitarset(
+            batch_size=args.batch_size,
             dataset_range=(0, n_train_files),
             style=args.style,
             genres=args.genres,
-            allowed_strings=args.strings,
+            allowed_strings=args.allowed_strings,
             shuffle_files=args.shuffle_files,
             conf_threshold=args.confidence_threshold,
             example_length=args.example_length,
             return_name=False,
             f0_from_mix=args.f0_cuesta,
-            cunet_original=False)
+            cunet_original=False,
+            file_list=False,
+            normalize_mix=args.normalize_mix,
+            normalize_sources=args.normalize_sources)
         
         valid_dataset = Guitarset(
+            batch_size=args.batch_size,
             dataset_range=(n_train_files, n_train_files + n_valid_files),
             style=args.style,
             genres=args.genres,
-            allowed_strings=args.strings,
+            allowed_strings=args.allowed_strings,
             shuffle_files=False,
             conf_threshold=args.confidence_threshold,
             example_length=args.example_length,
             return_name=False,
             f0_from_mix=args.f0_cuesta,
-            cunet_original=False)
+            cunet_original=False,
+            file_list=False,
+            normalize_mix=args.normalize_mix,
+            normalize_sources=args.normalize_sources)
         
     return train_dataset, valid_dataset, args
 

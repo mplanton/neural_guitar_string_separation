@@ -460,7 +460,6 @@ class SynthParameterDecoderSimple(torch.nn.Module):
         return z
 
 
-
 if __name__ == '__main__':
 
 

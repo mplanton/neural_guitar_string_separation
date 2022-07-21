@@ -10,10 +10,10 @@ import numpy as np
 import scipy.signal
 import math
 
-#from ddsp import processors
-#from ddsp import core, spectral_ops
-import processors
-import core, spectral_ops
+from ddsp import processors
+from ddsp import core, spectral_ops
+#import processors
+#import core, spectral_ops
 
 import matplotlib.pyplot as plt
 
@@ -815,7 +815,7 @@ class KarplusStrong(processors.Processor):
                  batch_size=4,
                  n_samples=64000,
                  sample_rate=16000,
-                 audio_frame_size=512,
+                 audio_frame_size=256,
                  n_strings=6,
                  min_freq=20,
                  excitation_length=0.005):
@@ -894,8 +894,6 @@ class KarplusStrong(processors.Processor):
         # Distinguish onsets = 1 from offsets = -1
         # Differentiate the on_offsets gate signal
         on_offsets = self.diff(on_offsets)
-        end = torch.zeros((self.batch_size, self.n_strings, 1))
-        on_offsets = torch.cat((on_offsets, end), dim=-1)
         # Separate note onsets and offsets
         onsets = torch.clamp(on_offsets, 0, 1)
         offsets = torch.clamp(on_offsets, -1, 0) * -1

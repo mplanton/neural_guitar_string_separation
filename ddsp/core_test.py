@@ -179,10 +179,124 @@ class TestCore(unittest.TestCase):
         difference = y_target.numpy() - y.numpy()
         mean_difference = abs(difference).mean()
         self.assertLessEqual(mean_difference, threshold)
+    
+    def test_delay_line_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        delay_time = 0.01 # sec
+        sr = 16000
+
+        delays = torch.ones((batch_size, n_sources)) * delay_time
         
+        dl = core.DelayLine(batch_size, n_sources, delay_time, sr)
+        dl.set_delay(delays)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        # Test both methods for detaching from the graph.
+        for method in range(2):
+            for i in range(sig_len):
+                x_in = x[..., i]
+                # Zeroing out the gradient
+                if x_in.grad is not None:
+                    x_in.grad.zero_()
+                
+                # Set parameter to calculate gradient
+                x_in.requires_grad = True
+                
+                y = dl(x_in)
+                
+                # Dummy cost function
+                error = y.sum()
+                error.backward()
+            
+                # Detach from current graph.
+                if method == 0:
+                    dl.clear_state()
+                else:
+                    dl.detach()
+    
+    def test_simple_lowpass_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        fc = 2500
+        sr = 16000
+
+        fcs = torch.ones((batch_size, n_sources)) * fc
+        
+        filt = core.SimpleLowpass(batch_size, n_sources, sr)
+        filt.set_fc(fcs)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        # Test both methods for detaching from the graph.
+        for method in range(2):
+            for i in range(sig_len):
+                x_in = x[..., i]
+                # Zeroing out the gradient
+                if x_in.grad is not None:
+                    x_in.grad.zero_()
+                
+                # Set parameter to calculate gradient
+                x_in.requires_grad = True
+                
+                y = filt(x_in)
+                
+                # Dummy cost function
+                error = y.sum()
+                error.backward()
+                
+                # Detach from current graph.
+                if method == 0:
+                    filt.clear_state()
+                else:
+                    filt.detach()
+    
+    def test_simple_highpass_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        fc = 2500
+        sr = 16000
+
+        fcs = torch.ones((batch_size, n_sources)) * fc
+        
+        filt = core.SimpleHighpass(batch_size, n_sources, sr)
+        filt.set_fc(fcs)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        # Test both methods for detaching from the graph.
+        for method in range(2):
+            for i in range(sig_len):
+                x_in = x[..., i]
+                # Zeroing out the gradient
+                if x_in.grad is not None:
+                    x_in.grad.zero_()
+                
+                # Set parameter to calculate gradient
+                x_in.requires_grad = True
+                
+                y = filt(x_in)
+                
+                # Dummy cost function
+                error = y.sum()
+                error.backward()
+                
+                # Detach from current graph.
+                if method == 0:
+                    filt.clear_state()
+                else:
+                    filt.detach()
+
 
 if __name__ == '__main__':
     #test = TestCore()
-    #test.test_delay_line_delay()
+    #test.test_simple_highpass_differentiability()
 
     unittest.main()

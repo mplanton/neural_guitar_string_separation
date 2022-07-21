@@ -1305,7 +1305,7 @@ class DelayLine:
         self.delay = delay_time * self.sr
         # just the fractional part of the delay in samples
         self.eta = self.delay - torch.floor(self.delay)
-        # TODO: For time varying f0 there should be a strategy to prevent artifacts.
+        # TODO: For time varying f0 there may be a strategy to prevent artifacts.
         self.read_idx = self.write_idx - torch.floor(self.delay).type(torch.int)
         # Wrap around if necessary
         self.read_idx %= self.buffer_length
@@ -1375,7 +1375,7 @@ class SimpleLowpass:
     n_filters: int, Number of filters per batch
     sr: int, sample rate
     """
-    def __init__(self, batch_size, n_filters, sr):
+    def __init__(self, batch_size: int, n_filters: int, sr: int):
         self.dt = 1 / sr
         # Initialize cutoff frequency
         fc = sr / 2
@@ -1436,7 +1436,7 @@ class SimpleHighpass:
     n_filters: int, Number of filters per batch
     sr: int, sample rate
     """
-    def __init__(self, batch_size, n_filters, sr):
+    def __init__(self, batch_size: int, n_filters: int, sr: int):
         self.dt = 1 / sr
         # Initialize cutoff frequency
         fc = sr / 2
@@ -1492,7 +1492,7 @@ class Diff:
     of a signal x[n] along its last dimension.
     This differentiation filter holds its state and is initialized to zero.
     """
-    def __init__(self, batch_size, n_channels):
+    def __init__(self, batch_size: int, n_channels: int):
         self.last_x = torch.zeros((batch_size, n_channels, 1))
     
     def __call__(self, x):
