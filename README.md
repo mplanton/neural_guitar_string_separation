@@ -42,22 +42,22 @@ librosa==0.8.0 scikit-learn pandas resampy==0.2.2 tensorboard configargparse`
 
 ## Training
 
-    python train.py -c config.txt
+        python train.py -c config.txt
     
-    python train_u_nets.py -c unet_config.txt
+        python train_u_nets.py -c unet_config.txt
 
 Resume training with:
 
-    python train.py -c config.txt --wst-model path/to/checkpoint/directory
+        python train.py -c config.txt --wst-model path/to/checkpoint/directory
 
 ## Evaluation
 
-    python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD'
+        python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD'
 
 ## Inference
 
-    python inference.py --tag 'TAG' --test-set CSD --song-name 'El Rossinyol'
-    python inference.py --tag 'TAG' --test-set Guitarset --song-name '05_SS3-98-C_comp_hex_cln'
+        python inference.py --tag 'TAG' --test-set CSD --song-name 'El Rossinyol'
+        python inference.py --tag 'TAG' --test-set Guitarset --song-names 05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav
 
 ## Acknowledgment
 

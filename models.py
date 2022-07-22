@@ -326,10 +326,12 @@ class KarplusStrongAutoencoder(_Model):
 
         mix_out = torch.sum(sources, dim=1)
 
+        if self.return_sources and (self.return_fc or return_fc):
+            return mix_out, sources, fc
+        if not self.return_sources and (self.return_fc or return_fc):
+            return mix_out, fc
         if self.return_sources:
             return mix_out, sources
-        if self.return_fc:
-            return mix_out, fc
         return mix_out
 
     def detach(self):

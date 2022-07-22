@@ -55,7 +55,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 trained_model, model_args = utils.load_model(tag, device, return_args=True)
 trained_model.return_synth_params = False
-trained_model.return_sources=True
+trained_model.return_sources = True
 
 
 voices = model_args['voices'] if 'voices' in model_args.keys() else 'satb'
@@ -80,8 +80,9 @@ if args.test_set == 'CSD':
 
     test_set = torch.utils.data.ConcatDataset([el_rossinyol, locus_iste, nino_dios])
 
+
 # Guitarset Dataset
-# TODO: do not hard code dataset parameters
+n_test_files = None
 if args.test_set == "Guitarset":
     n_files_per_style_genre = model_args['n_files_per_style_genre']
     valid_split = model_args['valid_split']
@@ -89,20 +90,25 @@ if args.test_set == "Guitarset":
     n_valid_files = int(valid_split * n_files_per_style_genre)
     # Use same amount of test data as validation data.
     # We use the next unused files of the Dataset.
-    n_test_files = n_valid_files
+    if n_test_files == None:
+        n_test_files = n_valid_files
     
     test_set = data.Guitarset(
+        batch_size=model_args['batch_size'], # Must be same batch size as in training.
         dataset_range=(n_train_files + n_valid_files,
                        n_train_files + n_valid_files + n_test_files),
         style=model_args['style'],
         genres=model_args['genres'],
-        allowed_strings=model_args['strings'],
+        allowed_strings=model_args['allowed_strings'],
         shuffle_files=False,
         conf_threshold=model_args['confidence_threshold'],
         example_length=model_args['example_length'],
         return_name=True,
         f0_from_mix=f0_cuesta,
-        cunet_original=False)
+        cunet_original=False,
+        file_list=False,
+        normalize_mix=model_args['normalize_mix'],
+        normalize_sources=model_args['normalize_sources'])
 
 
 eval_results = pd.DataFrame({'mix_name': [], 'eval_seed': [], 'voice': [], 'eval_frame': [], 'sp_SNR': [], 'sp_SI-SNR': [],
@@ -122,8 +128,11 @@ for seed in range(n_seeds):
 
     if args.test_set == "CSD" or is_u_net:
         pbar = tqdm.tqdm(test_set)
+    elif args.test_set == "Guitarset":
+        # Guitarset does batching on its own.
+        pbar = tqdm.tqdm(DataLoader(test_set, batch_size=None, shuffle=False))
     else:
-        pbar = tqdm.tqdm(iter(DataLoader(test_set, batch_size=1, shuffle=False)))
+        pbar = tqdm.tqdm(DataLoader(test_set, batch_size=1, shuffle=False))
     
     for d in pbar:
         mix = d[0].to(device)
@@ -131,12 +140,11 @@ for seed in range(n_seeds):
         target_sources = d[2].to(device)
         name = d[3]
         voices = d[4]
-
+        
+        if args.test_set == "Guitarset" and test_set.batch_size == 1:
+            name = name[0]
         if args.test_set != "Guitarset":
-            mix = mix.unsqueeze(0)
-            target_sources = target_sources.unsqueeze(0)
-
-        f0_hz = f0_hz[None, :, :]
+            f0_hz = f0_hz[None, :, :]
 
         batch_size, n_samples, n_sources = target_sources.shape
 
@@ -202,10 +210,16 @@ for seed in range(n_seeds):
 
         n_eval_frames = snr.shape[-1]
 
-        # mix_names = [n for n in name for _ in range(n_sources * n_eval_frames)]
-        mix_names = [name for _ in range(n_sources * n_eval_frames)]
-        # voice = [v for b in range(batch_size) for v in voices[b] for _ in range(n_eval_frames)]
+        if batch_size > 1:
+            mix_names = [n for n in name for _ in range(n_sources * n_eval_frames)]
+        else:
+            mix_names = [name for _ in range(n_sources * n_eval_frames)]
+        #voice = [v for b in range(batch_size) for v in voices[b] for _ in range(n_eval_frames)]
         voice = [v for v in voices for _ in range(n_eval_frames)]
+        if args.test_set == "Guitarset":
+            voice = batch_size * voice
+        
+        
         eval_frame = [f for _ in range(n_sources * batch_size) for f in range(n_eval_frames)]
         seed_results = [seed] * len(eval_frame)
 
