@@ -10,6 +10,7 @@ import tqdm
 import argparse
 import glob
 from scipy.io import wavfile
+import json
 
 import matplotlib.pyplot as plt
 
@@ -77,6 +78,7 @@ elif args.test_set == "Guitarset":
 
 # Feed mix and f0-tracks in example_length chunks to the model for separation
 # and collect the output.
+target_sources_slices = []
 source_estimates_slices = []
 source_estimates_masking_slices = []
 fcs = []
@@ -95,30 +97,40 @@ for mix_slice, freqs_slice, sources_slice in pbar:
     source_estimates_masking_slice = torch.reshape(source_estimates_masking_slice, (batch_len, n_sources, n_samples))
     source_estimates_slices.append(source_estimates_slice)
     source_estimates_masking_slices.append(source_estimates_masking_slice)
+    target_sources_slices.append(torch.transpose(sources_slice, 1, 2))
 
 # assemble the outputs to continuous signals
 source_estimates = torch.cat(source_estimates_slices, dim=-1).numpy()
 source_estimates_masking = torch.cat(source_estimates_masking_slices, dim=-1).numpy()
+target_sources = torch.cat(target_sources_slices, dim=-1).numpy()
 fcs = torch.cat(fcs, dim=-1).numpy()
 
 out_path = "inference/" + tag
 os.makedirs("inference", exist_ok=True)
 os.makedirs(out_path, exist_ok=True)
 
-# Get voice declaration
-if args.test_set == "CSD":
-    voice_dict = {'b':'Bajos', 'a':'ContraAlt', 's':'Soprano', 't':'Tenor'}
-    voice_list = [voice_dict[key] for key in ('b', 'a', 's', 't')]
-elif args.test_set == "Guitarset":
-    voice_list = model_args['allowed_strings']
+# Get voice declaration -> is currently not used
+# if args.test_set == "CSD":
+#     voice_dict = {'b':'Bajos', 'a':'ContraAlt', 's':'Soprano', 't':'Tenor'}
+#     voice_list = [voice_dict[key] for key in ('b', 'a', 's', 't')]
+# elif args.test_set == "Guitarset":
+#     voice_list = model_args['allowed_strings']
 
 # Save files.
 for batch in range(batch_size):
-    wavfile.write(out_path + f"/source_estimates_batch{batch}.wav",
+    n_batch = str(batch).zfill(2)
+    wavfile.write(out_path + f"/{n_batch}_source_estimates.wav",
                   rate=16000,
                   data=source_estimates[batch].T)
-    wavfile.write(out_path + f"/source_estimates_masking_batch{batch}.wav",
+    wavfile.write(out_path + f"/{n_batch}_source_estimates_masking.wav",
                   rate=16000,
                   data=source_estimates_masking[batch].T)
+    wavfile.write(out_path + f"/{n_batch}_target_sources.wav",
+                  rate=16000,
+                  data=target_sources[batch].T)
 
 np.save(out_path + "/fcs.npy", fcs)
+
+f_name = "inference_songs.json"
+with open(os.path.join(out_path, f_name), "w") as file:
+    json.dump(file_list, file)

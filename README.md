@@ -52,7 +52,8 @@ Resume training with:
 
 ## Evaluation
 
-        python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD'
+        python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD' --no-baselines
+        python eval.py --tag 'KarplusStrong_ex1' --test-set 'Guitarset'
 
 ## Inference
 
