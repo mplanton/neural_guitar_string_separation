@@ -14,7 +14,7 @@
 # PyTorch implementation of DDSP following closely the original code
 # https://github.com/magenta/ddsp/blob/master/ddsp/core.py
 
-from typing import Any, Dict, Text, TypeVar
+from typing import Any, Dict, Text, TypeVar, Optional
 
 import torch
 import torchaudio
@@ -286,7 +286,7 @@ def upsample_with_windows(inputs: torch.Tensor,
                           n_timesteps: int,
                           add_endpoint: bool = True) -> torch.Tensor:
 
-    """Upsample a series of frames using using overlapping hann windows.
+    """Upsample a series of frames using overlapping hann windows.
           Good for amplitude envelopes.
 
           Args:
@@ -573,6 +573,101 @@ def frequency_impulse_response(magnitudes: torch.Tensor,
                                                         window_size)
 
     return impulse_response
+
+
+def sinc(x, threshold=1e-20):
+    """Normalized zero phase version (peak at zero)."""
+    x = torch_float32(x)
+    x = torch.where(torch.abs(x) < threshold, threshold * torch.ones_like(x), x)
+    x = np.pi * x
+    return torch.sin(x) / x
+
+
+def sinc_impulse_response(cutoff_frequency,
+                          window_size=512,
+                          sample_rate=None,
+                          high_pass=False):
+    """Get a sinc impulse response for a set of low-pass cutoff frequencies.
+    Args:
+      cutoff_frequency: Frequency cutoff for low-pass sinc filter. If the
+        sample_rate is given, cutoff_frequency is in Hertz. If sample_rate is
+        None, cutoff_frequency is normalized ratio (frequency/nyquist) in the
+        range [0, 1.0]. Shape [batch_size, n_time, 1].
+      window_size: Size of the Hamming window to apply to the impulse.
+      sample_rate: Optionally provide the sample rate.
+      high_pass: If true, filter removes frequencies below cutoff (high-pass), if
+        false [default], filter removes frequencies above cutoff (low-pass).
+    Returns:
+      impulse_response: A series of impulse responses. Shape
+        [batch_size, n_time, (window_size // 2) * 2 + 1].
+    """
+    cutoff_frequency = torch_float32(cutoff_frequency)
+    # Convert frequency to samples/sample_rate [0, Nyquist] -> [0, 1].
+    if sample_rate is not None:
+      cutoff_frequency *= 2.0 / sample_rate
+  
+    # Create impulse response axis.
+    half_size = window_size // 2
+    full_size = half_size * 2 + 1
+    idx = torch.arange(-half_size, half_size + 1.0, dtype=torch.float32)
+    idx = idx[None, None, :]
+  
+    # Compute impulse response.
+    impulse_response = sinc(cutoff_frequency * idx)
+  
+    # Window the impulse response.
+    window = torch.hamming_window(full_size)
+    window = window.expand(impulse_response.shape)
+    if torch.is_complex(impulse_response):
+        impulse_response = window * impulse_response.real()
+    else:
+        impulse_response = window * impulse_response
+  
+    # Normalize for unity gain.
+    impulse_response /= torch.abs(
+        torch.sum(impulse_response, axis=-1, keepdims=True))
+  
+    if high_pass:
+      # Invert filter.
+      pass_through = np.zeros(impulse_response.shape)
+      pass_through[..., half_size] = 1.0
+      pass_through = torch.Tensor(pass_through, dtype=torch.float32)
+      impulse_response = pass_through - impulse_response
+  
+    return impulse_response
+
+
+def sinc_filter(audio: torch.Tensor,
+                cutoff_frequency: torch.Tensor,
+                window_size: int = 512,
+                sample_rate: Optional[int] = None,
+                padding: Text = 'same',
+                high_pass: bool = False) -> torch.Tensor:
+  """Filter audio with sinc (brick-wall) low-pass filter.
+  Args:
+    audio: Input audio. Tensor of shape [batch, audio_timesteps].
+    cutoff_frequency: Frequency cutoff for low-pass sinc filter. If the
+      sample_rate is given, cutoff_frequency is in Hertz. If sample_rate is
+      None, cutoff_frequency is normalized ratio (frequency/nyquist) in the
+      range [0, 1.0]. Shape [batch_size, n_time, 1].
+    window_size: Size of the Hamming window to apply to the impulse.
+    sample_rate: Optionally provide the sample rate.
+    padding: Either 'valid' or 'same'. For 'same' the final output to be the
+      same size as the input audio (audio_timesteps). For 'valid' the audio is
+      extended to include the tail of the impulse response (audio_timesteps +
+      window_size - 1).
+    high_pass: If true, filter removes frequencies below cutoff (high-pass), if
+      false [default], filter removes frequencies above cutoff (low-pass).
+  Returns:
+    Filtered audio. Tensor of shape
+      [batch, audio_timesteps + window_size - 1] ('valid' padding) or shape
+      [batch, audio_timesteps] ('same' padding).
+  """
+  impulse_response = sinc_impulse_response(cutoff_frequency,
+                                           window_size=window_size,
+                                           sample_rate=sample_rate,
+                                           high_pass=high_pass)
+  return fft_convolve(audio, impulse_response, padding=padding)
 
 
 def apply_window_to_impulse_response(impulse_response: torch.Tensor,
@@ -1154,7 +1249,7 @@ def apply_all_pole_filter(audio: torch.Tensor,
     Time-varying filter. Given audio [batch, n_samples], and a sequence of
     IIR filter coefficients [batch, n_frames, n_coeff], splits the audio into frames
     with length audio_block_size and 50% overlap. The overlap is fixed to 50%
-    to fulfill the constant overlap app condition for the window. Then,
+    to fulfill the constant overlap add condition for the window. Then,
     the filter is applied frame-wise, and then the audio signal is reconstructed by
     overlap-and-add.
 
@@ -1485,6 +1580,58 @@ class SimpleHighpass:
         self.last_y = self.last_y.detach()
 
 
+def slice(input, begin, size):
+    """mimic tf.slice
+
+    This operation extracts a slice of size size from a tensor input
+    starting at the location specified by begin. The slice size is
+    represented as a tensor shape, where size[i] is the number of
+    elements of the 'i'th dimension of input_ that you want to slice.
+    The starting location (begin) for the slice is represented as an
+    offset in each dimension of input. In other words, begin[i] is the
+    offset into the i'th dimension of input that you want to slice from.
+    """
+    dims = len(input.shape)
+    if dims == 1:
+        slice = input[begin[0]:begin[0]+size[0]]
+    elif dims == 2:
+        slice = input[begin[0]:begin[0]+size[0], begin[1]:begin[1]+size[1]]
+    elif dims == 3:
+        slice = input[begin[0]:begin[0]+size[0], begin[1]:begin[1]+size[1], begin[2]:begin[2]+size[2]]
+    elif dims == 4:
+        slice = input[begin[0]:begin[0]+size[0], begin[1]:begin[1]+size[1],
+                      begin[2]:begin[2]+size[2], begin[3]:begin[3]+size[3]]
+    else:
+        raise NotImplementedError("slice does not support more than 4 dimensions at the moment")
+    return slice
+
+
+def diff(x, axis=-1):
+    """Take the finite difference of a tensor along an axis.
+    Args:
+      x: Input tensor of any dimension.
+      axis: Axis on which to take the finite difference.
+    Returns:
+      d: Tensor with size less than x by 1 along the difference dimension.
+    Raises:
+      ValueError: Axis out of range for tensor.
+    """
+    shape = list(x.shape)
+    if axis >= len(shape):
+        raise ValueError('Invalid axis index: %d for tensor with only %d axes.' %
+                         (axis, len(shape)))
+
+    begin_back = [0 for _ in range(len(shape))]
+    begin_front = [0 for _ in range(len(shape))]
+    begin_front[axis] = 1
+
+    shape[axis] -= 1
+    slice_front = slice(x, begin_front, shape)
+    slice_back = slice(x, begin_back, shape)
+    d = slice_front - slice_back
+    return d
+
+# Extension to the DDSP library for physical modeling
 class Diff:
     """
     Calculate the backward difference

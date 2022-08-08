@@ -294,9 +294,76 @@ class TestCore(unittest.TestCase):
                 else:
                     filt.detach()
 
+    def test_sinc(self):
+        x = torch.cat((torch.ones(1), torch.zeros(10)))
+        y = core.sinc(x)
+        
+        #plt.figure()
+        #plt.plot(y.numpy(), c="r", label="output")
+        #plt.plot(x.numpy(), c="b", label="input")
+        #plt.legend()
+
+    def test_sinc_impulse_response(self):
+        batch_size = 2
+        sr = 16000
+        fc = torch.tensor([80, 100, 1000])
+        fc = fc.unsqueeze(0).repeat(batch_size, 1).unsqueeze(-1)
+        
+        ir = core.sinc_impulse_response(cutoff_frequency=fc, sample_rate=sr)
+        
+        #print(ir.shape)
+        #plt.figure()
+        #for i in range(ir.shape[1]):
+        #    plt.plot(ir[0, i].numpy())
+        #    plt.yscale('log')
+        #plt.title("test_sinc_impulse_response")
+        #plt.show()
+
+    def test_sinc_filter(self):
+        sample_rate = 16000
+        noise = np.random.uniform(-0.5, 0.5, [1, sample_rate *4])
+        noise = torch.as_tensor(noise, dtype=torch.float32)
+        f_cutoff = np.linspace(0., sample_rate/2, 200)[np.newaxis, :, np.newaxis]
+        f_cutoff = torch.as_tensor(f_cutoff, dtype=torch.float32)
+        
+        y = core.sinc_filter(audio=noise, cutoff_frequency=f_cutoff,
+                             sample_rate=sample_rate, window_size=128)
+        
+        # import librosa
+        # import librosa.display
+        # fig, ax = plt.subplots()
+        # D_highres = librosa.stft(y[0].numpy(), hop_length=256, n_fft=4096)
+        # S_db_hr = librosa.amplitude_to_db(np.abs(D_highres), ref=np.max)
+        # img = librosa.display.specshow(S_db_hr, sr=sample_rate, hop_length=256,
+        #                                x_axis='time', y_axis='linear', ax=ax)
+        # ax.set(title='test_sinc_filter')
+        # fig.colorbar(img, ax=ax, format="%+2.f dB")
+    
+    def test_fft_convolve(self):
+        sample_rate = 16000
+        noise = np.random.uniform(-0.5, 0.5, [1, sample_rate *4])
+        noise = torch.as_tensor(noise, dtype=torch.float32)
+        f_cutoff = np.linspace(0., 1.0, 200)[np.newaxis, :, np.newaxis]
+        f_cutoff = torch.as_tensor(f_cutoff, dtype=torch.float32)
+        
+        ir = core.sinc_impulse_response(f_cutoff , 2048)
+        y = core.fft_convolve(noise, ir)
+        
+        # import librosa
+        # import librosa.display
+        # fig, ax = plt.subplots()
+        # D_highres = librosa.stft(y[0].numpy(), hop_length=256, n_fft=4096)
+        # S_db_hr = librosa.amplitude_to_db(np.abs(D_highres), ref=np.max)
+        # img = librosa.display.specshow(S_db_hr, sr=sample_rate, hop_length=256,
+        #                                x_axis='time', y_axis='linear', ax=ax)
+        # ax.set(title='test_fft_convolve')
+        # fig.colorbar(img, ax=ax, format="%+2.f dB")
+        
 
 if __name__ == '__main__':
     #test = TestCore()
     #test.test_simple_highpass_differentiability()
+    #test.test_sinc_filter()
+    #test.test_fft_convolve()
 
     unittest.main()

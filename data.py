@@ -661,7 +661,7 @@ class Guitarset(torch.utils.data.IterableDataset):
         * 5 different musical genres: Bossa Nova, Funk, Jazz, Rock, Singer Songwriter
         * 2 different playing styles
     There are 36 recordings per style and genre, which makes a total of 360
-    recordings with an average duration of 30 seconds.
+    recordings with a varying duration of 20 to 30 seconds.
     
     The dataset is expected to have a sample rate of 16kHz and f0 information
     must be provided via single f0 tracking with CREPE or via multiple f0
