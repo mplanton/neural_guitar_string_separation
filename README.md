@@ -55,6 +55,9 @@ Resume training with:
         python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD' --no-baselines
         python eval.py --tag 'KarplusStrong_ex1' --test-set 'Guitarset'
 
+### Show statistics of evaluation
+        python eval_show_stats.py --tag 'TAG' --info-json 'path/to/info/TAG.json' --box-plot
+
 ## Inference
 
         python inference.py --tag 'TAG' --test-set CSD --song-name 'El Rossinyol'

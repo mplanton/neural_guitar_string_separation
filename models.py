@@ -251,6 +251,8 @@ class KarplusStrongAutoencoder(_Model):
                                             output_size=decoder_output_size,
                                             bidirectional=bidirectional)
         
+        self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
+        
         # synth
         self.ks_synth = synths.KarplusStrong(batch_size=batch_size,
                                             n_samples=example_length,
@@ -260,7 +262,6 @@ class KarplusStrongAutoencoder(_Model):
                                             min_freq=20,
                                             excitation_length=0.005)
         
-        self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
 
     @classmethod
     def from_config(cls, config: dict):

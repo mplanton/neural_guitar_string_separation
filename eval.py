@@ -38,9 +38,7 @@ def irm(mix, target_sources):
     n_fft = 2048
     hop_size = 256
     
-    batch_size = target_sources.shape[0]
-    n_sources = target_sources.shape[1]
-    n_samples = target_sources.shape[2]
+    batch_size, n_sources, n_samples = target_sources.shape
     
     mix_stft = torch.stft(mix, n_fft=n_fft, hop_length=hop_size)
     X_mix = torch.view_as_complex(mix_stft).repeat(n_sources, 1, 1)

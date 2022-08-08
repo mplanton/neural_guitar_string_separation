@@ -4,11 +4,12 @@ import json
 import os
 import matplotlib.pyplot as plt
 
-# python eval_show_stats.py --tag 'TAG' --info-json 'path/to/info/TAG.json'
+# python eval_show_stats.py --tag 'TAG' --info-json 'path/to/info/TAG.json' --box-plot
 
 parser = parser = argparse.ArgumentParser()
 parser.add_argument('--tag', type=str, help="Model tag.")
-parser.add_argument('--info-json', type=str, help="Path to the JSON file containing the model info like args and training information.")
+parser.add_argument('--info-json', type=str, \
+                    help="Path to the trained models JSON file containing the model info.")
 parser.add_argument('--box-plot', action='store_true', default=False, help=\
                     "Plot the metrics as box plots.")
 
@@ -72,6 +73,12 @@ if os.path.exists(noise_path):
     print(eval_noise[metrics].describe())
 
 # Box plot
+ylabels = {
+    'sp_SNR': 'sp. SNR [dB]',
+    'sp_SI-SNR': 'sp. SI-SNR [dB]',
+    'SI-SDR': 'SI-SDR [dB]',
+    'mel_cep_dist': 'Mel Cepstral Dist.'
+}
 if args.box_plot:
     for metric in metrics:
         # Accumulate metrics
@@ -82,5 +89,5 @@ if args.box_plot:
         df_metric = pd.DataFrame(df_metric)
         fig = plt.figure()
         df_metric.boxplot()
-        plt.title(metric)
-        fig.savefig(args.tag + "_" + metric + ".png", dpi=300)
+        plt.ylabel(ylabels[metric])
+        fig.savefig(args.tag + "_" + metric + ".pdf", dpi=300)
