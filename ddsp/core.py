@@ -602,18 +602,21 @@ def sinc_impulse_response(cutoff_frequency,
         [batch_size, n_time, (window_size // 2) * 2 + 1].
     """
     cutoff_frequency = torch_float32(cutoff_frequency)
-    # Convert frequency to samples/sample_rate [0, Nyquist] -> [0, 1].
-    if sample_rate is not None:
-      cutoff_frequency *= 2.0 / sample_rate
   
     # Create impulse response axis.
     half_size = window_size // 2
     full_size = half_size * 2 + 1
     idx = torch.arange(-half_size, half_size + 1.0, dtype=torch.float32)
     idx = idx[None, None, :]
-  
-    # Compute impulse response.
-    impulse_response = sinc(cutoff_frequency * idx)
+    
+    # Convert frequency to samples/sample_rate [0, Nyquist] -> [0, 1].
+    if sample_rate is not None:
+        cutoff_frequency_norm = cutoff_frequency * 2.0 / sample_rate
+        # Compute impulse response.
+        impulse_response = sinc(cutoff_frequency_norm * idx)
+    else:
+        # Compute impulse response.
+        impulse_response = sinc(cutoff_frequency * idx)
   
     # Window the impulse response.
     window = torch.hamming_window(full_size)
