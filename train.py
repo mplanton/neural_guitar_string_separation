@@ -13,6 +13,7 @@ import os
 import copy
 import configargparse
 import shutil
+import git
 
 
 from torch.utils.tensorboard import SummaryWriter
@@ -237,8 +238,8 @@ def main():
                         help='if True, only one song is used in BC dataset for training and validation')
 
 
-    parser.add_argument('--output', type=str, default="trained_models/{}/".format(default_tag),
-                        help='provide output path base folder name')
+    parser.add_argument('--output', type=str, default=None,
+                        help='Output path base folder name. Default at trained_models/tag/')
 
     parser.add_argument('--wst-model', type=str, help='Path to checkpoint folder for warmstart')
 
@@ -308,6 +309,8 @@ def main():
     parser.add_argument('--estimate-noise-mags', action='store_true', default=False)
     parser.add_argument('--unidirectional', action='store_true', default=False)
     parser.add_argument('--voiced-unvoiced-same-noise', action='store_true', default=False)
+    parser.add_argument('--physical-modeling-sample-rate', type=int, default=16000,
+                        help='Sample rate of the physical model which influences the range of fc.')
 
 
     parser.add_argument('--nb-workers', type=int, default=4,
@@ -333,10 +336,18 @@ def main():
 
     args, _ = parser.parse_known_args()
 
+    # Get git commit ID
+    repo = git.Repo(search_parent_directories=True)
+    git_sha = repo.head.object.hexsha
+
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     print("Using GPU:", use_cuda)
     #print("Using Torchaudio: ", utils._torchaudio_available())
     dataloader_kwargs = {'num_workers': args.nb_workers, 'pin_memory': True} if use_cuda else {}
+
+    # Check output dir
+    if args.output == None:
+        args.output = "trained_models/" + args.tag
 
     # create output dir if not exist
     target_path = Path(args.output)
@@ -491,6 +502,7 @@ def main():
         }
         
         params = {
+            'git_sha': git_sha,
             'epochs_trained': epoch,
             'args': vars(args),
             'best_loss': es.best,

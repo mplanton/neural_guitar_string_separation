@@ -19,6 +19,7 @@ from ddsp import spectral_ops
 from ddsp.core import hz_to_midi
 from ddsp.core import safe_divide
 from ddsp.core import torch_float32
+from ddsp.core import diff
 
 import numpy as np
 import torch
@@ -119,7 +120,6 @@ class SpectralLoss(torch.nn.Module):
 
         loss = 0.0
 
-        diff = spectral_ops.diff
         cumsum = torch.cumsum
 
         # Compute loss for each fft size.
@@ -181,7 +181,7 @@ class LSFRegularizer(torch.nn.Module):
 
         """
 
-        delta_lsf = spectral_ops.diff(lsf, axis=-1)
+        delta_lsf = diff(lsf, axis=-1)
 
         delta_lsf_l2 = delta_lsf.norm(p=2, dim=-1)
 

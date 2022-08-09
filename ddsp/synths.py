@@ -810,6 +810,7 @@ class KarplusStrong(processors.Processor):
         audio_frame_size: int, number of time samples in one (STFT) audio frame
         n_strings: int, number of strings
         min_freq: minimum frequency that can be synthesized
+        excitation_length: Length of the excitation signal in seconds
     """
     def __init__(self,
                  batch_size=4,
@@ -820,7 +821,8 @@ class KarplusStrong(processors.Processor):
                  min_freq=20,
                  excitation_length=0.005):
         assert n_samples % audio_frame_size == 0.0, \
-            "The n_frames must be a multiple of audio_frame_size!"
+            f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
+        
         super().__init__()
         self.batch_size = batch_size
         self.n_samples = n_samples

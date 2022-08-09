@@ -1,4 +1,5 @@
 import torch
+import torchaudio
 
 import network_components as nc
 from ddsp import spectral_ops, synths, core
@@ -215,6 +216,7 @@ class KarplusStrongAutoencoder(_Model):
                  batch_size,
                  allowed_strings=[1, 2, 3, 4, 5, 6],
                  sample_rate=16000,
+                 physical_modeling_sample_rate=32000,
                  example_length=64000,
                  fft_size=512,
                  hop_size=256,
@@ -231,6 +233,7 @@ class KarplusStrongAutoencoder(_Model):
         self.batch_size = batch_size
         self.allowed_strings = allowed_strings
         self.sample_rate = sample_rate
+        self.physical_modeling_sample_rate = physical_modeling_sample_rate
         self.fft_size = fft_size
         self.hop_size = hop_size
         self.return_sources = return_sources
@@ -254,14 +257,20 @@ class KarplusStrongAutoencoder(_Model):
         self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
         
         # synth
+        upsampling_factor = physical_modeling_sample_rate / sample_rate
+        pm_example_length = int(example_length * upsampling_factor)
+        pm_hop_size = int(hop_size * upsampling_factor)
         self.ks_synth = synths.KarplusStrong(batch_size=batch_size,
-                                            n_samples=example_length,
-                                            sample_rate=sample_rate,
-                                            audio_frame_size=hop_size,
+                                            n_samples=pm_example_length,
+                                            sample_rate=physical_modeling_sample_rate,
+                                            audio_frame_size=pm_hop_size,
                                             n_strings=len(allowed_strings),
                                             min_freq=20,
                                             excitation_length=0.005)
         
+        # Resampler to resample physical modeling output to system sample rate.
+        self.resampler = torchaudio.transforms.Resample(orig_freq=physical_modeling_sample_rate,
+                            new_freq=sample_rate)
 
     @classmethod
     def from_config(cls, config: dict):
@@ -269,6 +278,7 @@ class KarplusStrongAutoencoder(_Model):
         batch_size = config['batch_size'] if 'batch_size' in keys else 1
         allowed_strings = config['allowed_strings'] if 'allowed_strings' in keys else [1, 2, 3, 4, 5, 6]
         sample_rate = config['sample_rate'] if 'sample_rate' in keys else 16000
+        physical_modeling_sample_rate = config['physical_modeling_sample_rate'] if 'physical_modeling_sample_rate' in keys else sample_rate
         example_length = config['example_length'] if 'example_length' in keys else 64000
         encoder_hidden_size = config['encoder_hidden_size'] if 'encoder_hidden_size' in keys else 256
         embedding_size = config['embedding_size'] if 'embedding_size' in keys else 128
@@ -281,6 +291,7 @@ class KarplusStrongAutoencoder(_Model):
         return cls(batch_size=batch_size,
                    allowed_strings=allowed_strings,
                    sample_rate=sample_rate,
+                   physical_modeling_sample_rate=physical_modeling_sample_rate,
                    example_length=example_length,
                    fft_size=config['nfft'],
                    hop_size=config['nhop'],
@@ -312,8 +323,8 @@ class KarplusStrongAutoencoder(_Model):
         
         x_fc = self.fc_linear(x)
         
-        # constrain fc from 0Hz to the half sample rate
-        fc = core.exp_sigmoid(x_fc, max_value=(self.sample_rate / 2))
+        # constrain fc from 0Hz to the half physical modeling sample rate
+        fc = core.exp_sigmoid(x_fc, max_value=(self.physical_modeling_sample_rate / 2))
         fc = fc.squeeze(-1)
         fc = torch.reshape(fc, (batch_size, n_sources, n_frames))
 
@@ -323,7 +334,10 @@ class KarplusStrongAutoencoder(_Model):
 
 
         # apply synthesis model
-        sources = self.ks_synth(f0_hz=f0_hz, fc=fc, on_offsets=on_offsets)
+        pm_sources = self.ks_synth(f0_hz=f0_hz, fc=fc, on_offsets=on_offsets)
+        if self.sample_rate != self.physical_modeling_sample_rate:
+            # Resample
+            sources = self.resampler(pm_sources)
 
         mix_out = torch.sum(sources, dim=1)
 
