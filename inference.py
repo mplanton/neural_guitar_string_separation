@@ -43,7 +43,7 @@ if args.test_set == "CSD":
                                             batch_size=batch_size, shuffle=False))
 elif args.test_set == "Guitarset":
     print("Warning: Guitarset currently distributes all songs along the batch.")
-    print("The songs are saved concatenated as one audio file...")
+    print("The songs are saved concatenated as one audio file per batch...")
     n_sources = len(model_args['allowed_strings'])
     # Get files from args
     ds_path = "../Datasets/Guitarset/audio_16kHz/"

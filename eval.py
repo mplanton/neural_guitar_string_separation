@@ -1,3 +1,8 @@
+# Calculate metrics and save them to
+# evaluation/model_tag/eval_results_f0_variant/all_results.pandas
+#
+# Baselines are saved in evaluation/model_tag_baseline_type/
+
 import os
 import pickle
 import json

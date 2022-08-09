@@ -50,6 +50,23 @@ Resume training with:
 
         python train.py -c config.txt --wst-model path/to/checkpoint/directory
 
+## examination
+
+This bash script takes the trained model and
+
+* plots the learning curves,
+* does evaluation,
+* plots evaluation statistics, and
+* does inference.
+
+        Usage: examination.sh <trained-model-path> <test-set> <'list.wav of.wav test.wav fil    es.wav'>
+        bash examination.sh trained_models/KarplusStrong_ex1/ Guitarset \
+        '05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav'
+
+(Do not forget the apostrophes around the list of test files.)
+It does so by executing the following python scripts (plot_learning_curves.py, eval.py, eval_show_stats.py, inference.py, etc.).
+
+
 ## Evaluation
 
         python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD' --no-baselines

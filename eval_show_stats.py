@@ -90,4 +90,4 @@ if args.box_plot:
         fig = plt.figure()
         df_metric.boxplot()
         plt.ylabel(ylabels[metric])
-        fig.savefig(args.tag + "_" + metric + ".pdf", dpi=300)
+        fig.savefig(args.tag + "_eval_" + metric + ".pdf", dpi=300)
