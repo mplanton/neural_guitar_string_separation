@@ -2,12 +2,24 @@ import numpy as np
 from scipy import signal
 import torch
 import matplotlib.pyplot as plt
+import librosa
+import librosa.display
 import math
 #import spectrum
 
 import unittest
 
 import core, synths
+
+
+def plot_spec(y, sample_rate, title=""):
+    fig, ax = plt.subplots()
+    D_highres = librosa.stft(y.numpy(), hop_length=256, n_fft=4096)
+    S_db_hr = librosa.amplitude_to_db(np.abs(D_highres), ref=np.max)
+    img = librosa.display.specshow(S_db_hr, sr=sample_rate, hop_length=256,
+                                   x_axis='time', y_axis='linear', ax=ax)
+    ax.set(title=title)
+    fig.colorbar(img, ax=ax, format="%+2.f dB")
 
 
 class TestCore(unittest.TestCase):
@@ -329,15 +341,7 @@ class TestCore(unittest.TestCase):
         y = core.sinc_filter(audio=noise, cutoff_frequency=f_cutoff,
                              sample_rate=sample_rate, window_size=128)
         
-        # import librosa
-        # import librosa.display
-        # fig, ax = plt.subplots()
-        # D_highres = librosa.stft(y[0].numpy(), hop_length=256, n_fft=4096)
-        # S_db_hr = librosa.amplitude_to_db(np.abs(D_highres), ref=np.max)
-        # img = librosa.display.specshow(S_db_hr, sr=sample_rate, hop_length=256,
-        #                                x_axis='time', y_axis='linear', ax=ax)
-        # ax.set(title='test_sinc_filter')
-        # fig.colorbar(img, ax=ax, format="%+2.f dB")
+        #plot_spec(y, sample_rate, "test_sinc_filter")
     
     def test_fft_convolve(self):
         sample_rate = 16000
@@ -349,21 +353,106 @@ class TestCore(unittest.TestCase):
         ir = core.sinc_impulse_response(f_cutoff , 2048)
         y = core.fft_convolve(noise, ir)
         
-        # import librosa
-        # import librosa.display
-        # fig, ax = plt.subplots()
-        # D_highres = librosa.stft(y[0].numpy(), hop_length=256, n_fft=4096)
-        # S_db_hr = librosa.amplitude_to_db(np.abs(D_highres), ref=np.max)
-        # img = librosa.display.specshow(S_db_hr, sr=sample_rate, hop_length=256,
-        #                                x_axis='time', y_axis='linear', ax=ax)
-        # ax.set(title='test_fft_convolve')
-        # fig.colorbar(img, ax=ax, format="%+2.f dB")
+        #plot_spec(y, sample_rate, "test_fft_convolve")
+    
+    def test_time_domain_FIR(self):
+        sample_rate = 16000
+        batch_size = 2
+        n_filters = 3
+        N = 65 # Filter-order is N - 1
+
+        # Generate an input signal of length L
+        duration = 1 # sec
+        L = sample_rate * duration
+        input_signal = torch.rand((batch_size, n_filters, L)) * 2 - 1   
+
+        # Make time varying fc of shape [batch_size, n_time, 1].
+        n_frames = 100
+        fcs = torch.linspace(0, sample_rate/2, n_frames)
+        fcs = fcs.unsqueeze(0).repeat(batch_size, 1).unsqueeze(-1)
         
+        # Get lowpass impulse responses.
+        hs = core.sinc_impulse_response(cutoff_frequency=fcs,
+                                        window_size=N-1,
+                                        sample_rate=sample_rate)
+        
+        # Build one batch of impulse responses.
+        h11 = hs[0, 1].unsqueeze(0)
+        h12 = hs[0, 10].unsqueeze(0)
+        h13 = hs[0, 20].unsqueeze(0)
+        h21 = hs[0, 30].unsqueeze(0)
+        h22 = hs[0, 40].unsqueeze(0)
+        h23 = hs[0, 60].unsqueeze(0)
+        h1 = torch.cat((h11, h12, h13)).unsqueeze(0)
+        h2 = torch.cat((h21, h22, h23)).unsqueeze(0)
+        h = torch.cat((h1, h2), dim=0)
+        
+        # Create the FIR filters with the impulse responses.
+        fir_filter = core.TimeDomainFIR(h)
+        
+        sig_len = input_signal.shape[-1]
+        # We do not care about the last N - 1 samples of the convolution.
+        y = torch.zeros_like(input_signal)
+        for sample in range(sig_len):
+            x_n = input_signal[..., sample]
+            y[..., sample] = fir_filter(x_n)
+        
+        #print(y.shape)
+        for batch in range(batch_size):
+            for filter_n in range(n_filters):
+                plot_spec(y[batch, filter_n], sample_rate,
+                          "test_time_domain_FIR" + str(batch) + \
+                          " filter: " + str(filter_n))
+        
+    def test_time_domain_FIR_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        N = 65
+        fc = 2500
+        sr = 16000
+
+        fcs = torch.ones((batch_size, n_sources, 1)) * fc
+        hs = core.sinc_impulse_response(cutoff_frequency=fcs,
+                                        window_size=N-1,
+                                        sample_rate=sr)
+        
+        filt = core.TimeDomainFIR(hs)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        x = torch.rand((batch_size, n_sources, sig_len)) * 2 - 1
+        
+        # Test both methods for detaching from the graph.
+        for method in range(2):
+            for i in range(sig_len):
+                x_in = x[..., i]
+                # Zeroing out the gradient
+                if x_in.grad is not None:
+                    x_in.grad.zero_()
+                
+                # Set parameter to calculate gradient
+                x_in.requires_grad = True
+                
+                y = filt(x_in)
+                
+                # Dummy cost function
+                error = y.sum()
+                error.backward()
+                
+                # Detach from current graph.
+                if method == 0:
+                    filt.clear_state()
+                else:
+                    filt.detach()
 
 if __name__ == '__main__':
-    #test = TestCore()
+    test = TestCore()
+    
+    unittest.main()
+    
     #test.test_simple_highpass_differentiability()
     #test.test_sinc_filter()
     #test.test_fft_convolve()
-
-    unittest.main()
+    #test.test_time_domain_FIR()
+    #test.test_time_domain_FIR_differentiability()
+    

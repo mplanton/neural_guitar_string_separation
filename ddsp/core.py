@@ -631,11 +631,10 @@ def sinc_impulse_response(cutoff_frequency,
         torch.sum(impulse_response, axis=-1, keepdims=True))
   
     if high_pass:
-      # Invert filter.
-      pass_through = np.zeros(impulse_response.shape)
-      pass_through[..., half_size] = 1.0
-      pass_through = torch.Tensor(pass_through, dtype=torch.float32)
-      impulse_response = pass_through - impulse_response
+        # Invert filter.
+        pass_through = torch.zeros_like(impulse_response, dtype=torch.float32)
+        pass_through[..., half_size] = 1.0
+        impulse_response = pass_through - impulse_response
   
     return impulse_response
 
@@ -1581,6 +1580,62 @@ class SimpleHighpass:
         self.alpha = self.alpha.detach()
         self.last_x = self.last_x.detach()
         self.last_y = self.last_y.detach()
+
+
+# Extension to the DDSP library for physical modeling
+class TimeDomainFIR:
+    """
+    A time domain N-1 order FIR filter implementation to calculate outputs per sample.
+    The filter holds its state.
+    
+    Each sample is calculated by
+    y[n] = h^T x[n]
+    with the transpose ^T and the impulse response
+    h = [ h_0, h_1, ..., h_N-1 ]
+    and the delayed inputs
+    x[n] = [ x[n], x[n-1], ..., x[n-N+1] ].
+    
+    
+    h: torch.Tensor of shape [batch_size, n_filters, N] tensor of
+       impulse responses.
+    """
+    def __init__(self, h):
+        batch_size, n_filters, N = h.shape
+        self.batch_size = batch_size
+        self.n_filters = n_filters
+        self.h = h
+        self.x = torch.zeros((batch_size, n_filters, N))
+    
+    def set_ir(self, h):
+        """
+        Set the impulse responses h of the FIR filters.
+        h: torch.Tensor of shape [batch_size, n_filters, filter_length]
+        """
+        assert h.shape == self.x.shape, \
+            f"h must have same shape as x, but h has shape {h.shape} and x has shape {self.x.shape}!"
+        self.h = h
+    
+    def __call__(self, x_n):
+        """
+        Calculate one filtered output sample from one input sample x_n.
+        x_n: torch.Tensor of shape [batch_size, n_filters], the current input sample.
+        """
+        self.x = torch.cat((x_n.unsqueeze(-1), self.x[..., :-1]), dim=-1)
+        
+        # We do not have to compute the off-diagonal elements.
+        y_n = torch.zeros((self.batch_size, self.n_filters))
+        for batch in range(self.batch_size):
+            for filter_n in range(self.n_filters):
+                y_n[batch, filter_n] = self.h[batch, filter_n].T @ self.x[batch, filter_n]
+        return y_n
+    
+    def clear_state(self):
+        self.h = self.h.detach()
+        self.x = torch.zeros(*self.x.shape)
+    
+    def detach(self):
+        self.h = self.h.detach()
+        self.x = self.x.detach()
 
 
 def slice(input, begin, size):
