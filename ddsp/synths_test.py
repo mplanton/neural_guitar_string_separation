@@ -209,5 +209,10 @@ class TestCore(unittest.TestCase):
                     ks.detach()
 
 if __name__ == "__main__":
+    test = TestCore()
+    
     unittest.main()
+    
+    #test.test_KS_synthetic_input()
+    #test.test_KS_differentiability()
     

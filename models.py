@@ -226,7 +226,8 @@ class KarplusStrongAutoencoder(_Model):
                  decoder_output_size=512,
                  bidirectional=True,
                  return_sources=False,
-                 return_fc=False):
+                 return_fc=False,
+                 feedback_filter_order=64):
         super().__init__()
 
         # attributes
@@ -266,7 +267,8 @@ class KarplusStrongAutoencoder(_Model):
                                             audio_frame_size=pm_hop_size,
                                             n_strings=len(allowed_strings),
                                             min_freq=20,
-                                            excitation_length=0.005)
+                                            excitation_length=0.005,
+                                            feedback_filter_order=feedback_filter_order)
         
         # Resampler to resample physical modeling output to system sample rate.
         self.resampler = torchaudio.transforms.Resample(orig_freq=physical_modeling_sample_rate,
@@ -287,6 +289,7 @@ class KarplusStrongAutoencoder(_Model):
         bidirectional = not config['unidirectional'] if 'unidirectional' in keys else True
         return_sources = config['return_sources'] if 'return_sources' in keys else False
         return_fc = config['return_fc'] if 'return_fc' in keys else False
+        feedback_filter_order = config['feedback_filter_order'] if 'feedback_filter_order' in keys else 64
         
         return cls(batch_size=batch_size,
                    allowed_strings=allowed_strings,
@@ -301,7 +304,8 @@ class KarplusStrongAutoencoder(_Model):
                    decoder_output_size=decoder_output_size,
                    bidirectional=bidirectional,
                    return_sources=return_sources,
-                   return_fc=return_fc)
+                   return_fc=return_fc,
+                   feedback_filter_order=feedback_filter_order)
 
     def forward(self, mix_in, f0_hz, return_fc=False):
         # audio [batch_size, n_samples]
@@ -335,8 +339,8 @@ class KarplusStrongAutoencoder(_Model):
 
         # apply synthesis model
         pm_sources = self.ks_synth(f0_hz=f0_hz, fc=fc, on_offsets=on_offsets)
+        # Resample synthesized sources
         if self.sample_rate != self.physical_modeling_sample_rate:
-            # Resample
             sources = self.resampler(pm_sources)
 
         mix_out = torch.sum(sources, dim=1)
