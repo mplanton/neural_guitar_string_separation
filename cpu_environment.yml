@@ -365,4 +365,14 @@ dependencies:
   - zipp=3.8.0=py38h06a4308_0
   - zlib=1.2.12=h166bdaf_0
   - zstd=1.5.2=ha4553b6_0
+  - pip:
+    - future==0.18.2
+    - gitdb==4.0.9
+    - gitpython==3.1.27
+    - jams==0.3.4
+    - memory-profiler==0.60.0
+    - mido==1.2.10
+    - mir-eval==0.7
+    - pretty-midi==0.2.9
+    - smmap==5.0.0
 prefix: /home/manuel/anaconda3/envs/umss

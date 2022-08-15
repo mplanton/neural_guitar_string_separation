@@ -50,7 +50,7 @@ Resume training with:
 
         python train.py -c config.txt --wst-model path/to/checkpoint/directory
 
-## examination
+## Examination
 
 This bash script takes the trained model and
 
@@ -73,12 +73,23 @@ It does so by executing the following python scripts (plot_learning_curves.py, e
         python eval.py --tag 'KarplusStrong_ex1' --test-set 'Guitarset'
 
 ### Show statistics of evaluation
+
         python eval_show_stats.py --tag 'TAG' --info-json 'path/to/info/TAG.json' --box-plot
+
+
+### Compare models performances
+
+        python eval_compare_models.py path/to/trained/model1 path/to/trained/model2 ...
+
+The baseline metrics are taken from the first model path.
+Plots are saved under `eval_compare/date/`.
+
 
 ## Inference
 
         python inference.py --tag 'TAG' --test-set CSD --song-name 'El Rossinyol'
         python inference.py --tag 'TAG' --test-set Guitarset --song-names 05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav
+
 
 ## Acknowledgment
 
