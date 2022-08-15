@@ -809,10 +809,8 @@ class KarplusStrong(processors.Processor):
         sample_rate: int, sample rate in Hertz
         audio_frame_size: int, number of time samples in one (STFT) audio frame
         n_strings: int, number of strings
-        min_freq: float, minimum frequency that can be synthesized
-        excitation_length: float, Length of the excitation signal in seconds
-        feedback_filter_order: int, Order of the employed FIR filter in the
-                               feedback path
+        min_freq: minimum frequency that can be synthesized
+        excitation_length: Length of the excitation signal in seconds
     """
     def __init__(self,
                  batch_size=4,
@@ -821,8 +819,7 @@ class KarplusStrong(processors.Processor):
                  audio_frame_size=256,
                  n_strings=6,
                  min_freq=20,
-                 excitation_length=0.005,
-                 feedback_filter_order=64):
+                 excitation_length=0.005):
         assert n_samples % audio_frame_size == 0.0, \
             f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
         
@@ -833,7 +830,6 @@ class KarplusStrong(processors.Processor):
         self.audio_frame_size = audio_frame_size
         self.n_strings = n_strings
         self.min_freq = min_freq
-        self.feedback_filter_order = feedback_filter_order
         
         # Delay line
         self.max_delay = 1 / min_freq
@@ -842,43 +838,24 @@ class KarplusStrong(processors.Processor):
                                  length=self.max_delay,
                                  sr=sample_rate)
         
-        # Feedback filter (time invariant highpass and time varying lowpass)
-        
-        
-        fc_hp = 5
-        #fc_lp = sample_rate / 2
-        fc_lp = 4000
-        fcs_hp = torch.ones((batch_size, n_strings, 1)) * fc_hp
-        fcs_lp = torch.ones((batch_size, n_strings, 1)) * fc_lp
-        # Get DC blocking time invariant highpass impulse responses
-        self.h_hp = core.sinc_impulse_response(cutoff_frequency=fcs_hp,
-                                              window_size=feedback_filter_order,
-                                              sample_rate=sample_rate,
-                                              high_pass=True)
-        # Get time varying initial lowpass impulse responses
-        h_lp = core.sinc_impulse_response(cutoff_frequency=fcs_lp,
-                                          window_size=feedback_filter_order,
-                                          sample_rate=sample_rate,
-                                          high_pass=False)
-        # Combine the generated IRs
-        h_feedback = torch.zeros_like(h_lp)
-        for string in range(n_strings):
-            h_feedback[:, string] = core.fft_convolve(self.h_hp[:, string],
-                                                      h_lp[:, string],
-                                                      delay_compensation=-1)
-        
-        self.feedback_filter = core.TimeDomainFIR(h_feedback)
-        
-        #DBG
-        #import scipy.signal as signal
-        #w, h = signal.freqz(h_feedback[0, 0].numpy(), fs=sample_rate)
-        #plt.plot(w, 20 * np.log(np.abs(h)))
-        #DBG
+        # Lowpass
+        self.lp = core.SimpleLowpass(batch_size=batch_size,
+                                     n_filters=n_strings,
+                                     sr=sample_rate)
+        # DC blocking Highpass
+        self.hp = core.SimpleHighpass(batch_size=batch_size,
+                                      n_filters=n_strings,
+                                      sr=sample_rate)
+        hp_fc = 5
+        self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
         
         # Excitation
         self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
         # Use just white noise as excitation signal by now...
         self.excitation = torch.rand(self.n_excitation_samples) * 2 - 1
+        #DBG
+        #self.excitation = torch.linspace(-0.5, 0.5, self.n_excitation_samples)
+        #self.excitation = torch.clamp(99999*self.excitation, min=-0.5, max=0.5)
         
         # An excitation signal may reach into the next train example.
         self.last_excitation_overhead = torch.zeros(batch_size,
@@ -891,7 +868,8 @@ class KarplusStrong(processors.Processor):
         # Internal state of the synth
         self.internal_state = [
                 self.dl,
-                self.feedback_filter,
+                self.lp,
+                self.hp,
                 self.diff,
                 self.last_valid_f0
             ]
@@ -987,23 +965,13 @@ class KarplusStrong(processors.Processor):
             # Set parameters to the played notes.
             t0 = t0s[:, :, frame_idx]
             self.dl.set_delay(t0)
-            fc = fcs[:, :, frame_idx].unsqueeze(-1)
-            h_lp = core.sinc_impulse_response(cutoff_frequency=fc,
-                                              window_size=self.feedback_filter_order,
-                                              sample_rate=self.sample_rate,
-                                              high_pass=False)
-            # Combine the generated IRs
-            h_feedback = torch.zeros_like(h_lp)
-            for string in range(self.n_strings):
-                h_feedback[:, string] = core.fft_convolve(self.h_hp[:, string],
-                                                          h_lp[:, string],
-                                                          delay_compensation=-1)
-            self.feedback_filter.set_ir(h_feedback)
+            fc = fcs[:, :, frame_idx]
+            self.lp.set_fc(fc)
             
             # Synthesize one frame of audio
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
-                f = self.feedback_filter(self.dl(last_y))
+                f = self.hp(self.lp(self.dl(last_y)))
                 out[..., offset + i] = excitation_block[..., offset + i] + f
                 last_y = out[..., offset + i]
         return out

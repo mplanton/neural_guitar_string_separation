@@ -311,8 +311,6 @@ def main():
     parser.add_argument('--voiced-unvoiced-same-noise', action='store_true', default=False)
     parser.add_argument('--physical-modeling-sample-rate', type=int, default=16000,
                         help='Sample rate of the physical model which influences the range of fc.')
-    parser.add_argument('--feedback-filter-order', type=int, default=64,
-                        help='Order of the Karplus-Strong feedback FIR filter.')
 
 
     parser.add_argument('--nb-workers', type=int, default=4,

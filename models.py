@@ -226,8 +226,7 @@ class KarplusStrongAutoencoder(_Model):
                  decoder_output_size=512,
                  bidirectional=True,
                  return_sources=False,
-                 return_fc=False,
-                 feedback_filter_order=64):
+                 return_fc=False):
         super().__init__()
 
         # attributes
@@ -267,8 +266,7 @@ class KarplusStrongAutoencoder(_Model):
                                             audio_frame_size=pm_hop_size,
                                             n_strings=len(allowed_strings),
                                             min_freq=20,
-                                            excitation_length=0.005,
-                                            feedback_filter_order=feedback_filter_order)
+                                            excitation_length=0.005)
         
         # Resampler to resample physical modeling output to system sample rate.
         self.resampler = torchaudio.transforms.Resample(orig_freq=physical_modeling_sample_rate,
@@ -289,7 +287,6 @@ class KarplusStrongAutoencoder(_Model):
         bidirectional = not config['unidirectional'] if 'unidirectional' in keys else True
         return_sources = config['return_sources'] if 'return_sources' in keys else False
         return_fc = config['return_fc'] if 'return_fc' in keys else False
-        feedback_filter_order = config['feedback_filter_order'] if 'feedback_filter_order' in keys else 64
         
         return cls(batch_size=batch_size,
                    allowed_strings=allowed_strings,
@@ -304,8 +301,7 @@ class KarplusStrongAutoencoder(_Model):
                    decoder_output_size=decoder_output_size,
                    bidirectional=bidirectional,
                    return_sources=return_sources,
-                   return_fc=return_fc,
-                   feedback_filter_order=feedback_filter_order)
+                   return_fc=return_fc)
 
     def forward(self, mix_in, f0_hz, return_fc=False):
         # audio [batch_size, n_samples]
@@ -339,8 +335,8 @@ class KarplusStrongAutoencoder(_Model):
 
         # apply synthesis model
         pm_sources = self.ks_synth(f0_hz=f0_hz, fc=fc, on_offsets=on_offsets)
-        # Resample synthesized sources
         if self.sample_rate != self.physical_modeling_sample_rate:
+            # Resample
             sources = self.resampler(pm_sources)
 
         mix_out = torch.sum(sources, dim=1)
@@ -693,109 +689,3 @@ class BaselineUnet(_Model):
             return mask
         else:
             return y_hat
-
-class TestGuitarModel(_Model):
-    """
-    Test guitar set model to test the KarplusStrong physical modeling synthesis.
-    
-    batch_size: training batch size
-    sample_rate: audio sample rate
-    n_fft: FFT length in samples
-    fft_hop_size: hop size of the FFT in samples (must also be CREPE pitch tracking hop size)
-    n_samples: length of the train examples in samples
-    n_strings: number of strings to model
-    """
-    def __init__(self,
-                 batch_size,
-                 sample_rate=16000,
-                 n_fft=512,
-                 fft_hop_size=256,
-                 n_samples=64000,
-                 n_strings=6):
-        super().__init__()
-        
-        self.batch_size = batch_size
-        self.sample_rate = sample_rate
-        self.n_fft = n_fft
-        self.frame_size = fft_hop_size
-        self.n_samples = n_samples
-        self.n_strings = n_strings
-        
-        self.ks = synths.KarplusStrong(batch_size=batch_size,
-                                      n_samples=n_samples,
-                                      sample_rate=sample_rate,
-                                      audio_frame_size=fft_hop_size,
-                                      n_strings=n_strings,
-                                      min_freq=20,
-                                      excitation_length=0.005)
-    
-    def forward(self, mix, f0_hz):
-        """f0s and fcs of shape [batch_size, n_strings, n_frames]"""
-        # Onsets and offsets are analyzed from f0 by now.
-        on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
-                                              torch.tensor(0., device=f0_hz.device))
-        
-        # Artificial time variable fc at frame rate
-        dur = self.n_samples / self.sample_rate
-        t = torch.linspace(0, dur, f0_hz.shape[2])
-        t = t.unsqueeze(0).repeat(self.n_strings, 1).unsqueeze(0).repeat(self.batch_size, 1, 1)
-        f = 1
-        a = 2000
-        lfo = torch.sin(2 * np.pi * f * t)
-        fcs = 2100 + a * lfo
-        
-        sources = self.ks(f0_hz=f0_hz, fc=fcs, on_offsets=on_offsets)
-        return sources
-    
-if __name__ == "__main__":
-    torch.random.manual_seed(0)
-    
-    import data
-    import scipy.io.wavfile as wavfile
-    
-    batch_size = 1
-    example_length = 64000
-    conf_thresh = 0.4
-    
-    ds = data.Guitarset(
-        batch_size=batch_size,
-        dataset_range=(0, 1),
-        style='comp',
-        genres=['bn'],
-        allowed_strings=[1, 2, 3],
-        shuffle_files=False,
-        conf_threshold=conf_thresh, # Influences On/Offsets
-        example_length=example_length,
-        return_name=True, # Returns file name
-        f0_from_mix=False,
-        cunet_original=False,
-        file_list=False)
-    
-    loader = torch.utils.data.DataLoader(ds, batch_size=None, shuffle=False)
-    
-    model = TestGuitarModel(batch_size=batch_size,
-                            n_samples=example_length,
-                            n_strings=3)
-    
-    out_pred_sources = []
-    out_target_sources = []
-    for mix, freqs, sources, f_name, _ in loader:
-        print("Processing examples from ", f_name)
-        
-        freqs = freqs.permute(0, 2, 1)
-        target_sources = sources.permute(0, 2, 1)
-        predicted_sources = model(mix=mix, f0_hz=freqs)
-        out_pred_sources.append(predicted_sources)
-        out_target_sources.append(target_sources)
-    
-    out_pred_sources = torch.cat(out_pred_sources, dim=-1)
-    for batch in range(batch_size):
-        for string in range(out_pred_sources.shape[1]):
-            wavfile.write(f"KS_prediction_batch_{batch}_string_{string}_conf_{conf_thresh}.wav", 16000,
-                          out_pred_sources[batch, string].numpy())
-    
-    out_target_sources = torch.cat(out_target_sources, dim=-1)
-    for batch in range(batch_size):
-        for string in range(out_target_sources.shape[1]):
-            wavfile.write(f"KS_target_batch_{batch}_string_{string}_conf_{conf_thresh}.wav", 16000,
-                          out_target_sources[batch, string].numpy())
