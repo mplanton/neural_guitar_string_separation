@@ -119,5 +119,13 @@ for metric in metrics:
     plt.tight_layout()
     f_path = os.path.join(save_path, "median_ranking_" + metric + ".pdf")
     fig.savefig(f_path, dpi=300)
+    
+    # Mean Ranking
+    fig = plt.figure(figsize=[12, 9])
+    ax = df_metric.mean().sort_values().plot.bar()
+    ax.set_ylabel("mean " + ylabels[metric])
+    plt.tight_layout()
+    f_path = os.path.join(save_path, "mean_ranking_" + metric + ".pdf")
+    fig.savefig(f_path, dpi=300)
 
 print("Results saved in", save_path)
