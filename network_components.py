@@ -460,19 +460,59 @@ class SynthParameterDecoderSimple(torch.nn.Module):
         return z
 
 
-if __name__ == '__main__':
+class ExcitationParameterDecoder(torch.nn.Module):
+    """
+    
+    """
+    def __init__(self, input_size):
+        super().__init__()
+        self.lin = torch.nn.Linear(input_size, 1)
+    
+    def forward(self, x_lat, onset_frame_indices):
+        """
+        Args:
+            x_lat: Latent source representation,
+                torch.Tensor of shape [batch_size, n_sources, n_frames, input_size]
+            onset_frame_indices: Indices of the onsets in frames containing
+                indices of shape [batch, source, frame],
+                torch.tensor of shape [n_onsets, 3]
+        """
+        input_size = x_lat.shape[-1]
+        n_onsets = onset_frame_indices.shape[0]
+        
+        latent_onset_frames = torch.zeros((n_onsets, input_size))
+        # Indexing
+        for n in range(n_onsets):
+            batch, source, frame = onset_frame_indices[n]
+            latent_onset_frames[n] = x_lat[batch, source, frame]
+        
+        x = self.lin(latent_onset_frames)
+        y = core.exp_sigmoid(x)
+        return y
 
 
-    encoder = SeparationEncoderWithF03()
-    x = torch.rand(16, 64000)
-    f0 = torch.ones((16, 250, 2)) * 300
-    f0[:, :, 0] *= 2
-
-    out = encoder(x, f0)
-    print(out.shape)
-    # decoder = SourceFilterFIRDecoder()
-    # z = torch.rand(16, 250, 128)
-    # f0 = torch.rand(16, 125, 1)
-    # out = decoder(f0, z)
-    # print(out.shape)
-
+if __name__ == "__main__":
+    # Test ExcitationParameterDecoder
+    from random import randint
+    batch_size = 2
+    n_sources = 6
+    n_frames = 128
+    hidden_size = 512
+    n_onsets = 200
+    
+    latent_source_repr = torch.rand((batch_size, n_sources, n_frames, hidden_size))
+    
+    onset_frame_indices = []
+    for i in range(n_onsets):
+        batch = randint(0, batch_size - 1)
+        source = randint(0, n_sources - 1)
+        frame = randint(0, n_frames - 1)
+        onset_frame_indices.append([batch, source, frame])
+    onset_frame_indices = torch.tensor(onset_frame_indices)
+    
+    decoder = ExcitationParameterDecoder(input_size=hidden_size)
+    
+    fc_ex = decoder(x_lat=latent_source_repr,
+                    onset_frame_indices=onset_frame_indices)
+    
+    print("fc_ex.shape:", fc_ex.shape)

@@ -11,6 +11,7 @@ import unittest
 def generateParameters(batch_size, n_examples, example_length, N, J):
     """
     Build network output -> synth input
+    Constant parameters for every string.
     
     Args:
         batch_size: batch size
@@ -46,16 +47,20 @@ def generateParameters(batch_size, n_examples, example_length, N, J):
     #plt.title("on off")
     
     # fc: different for every string
-    fc = torch.Tensor([5000, 5500]).unsqueeze(0)
+    fc = torch.Tensor([0.8, 0.9]).unsqueeze(0)
     fc = fc.repeat(batch_size, 1).unsqueeze(-1).repeat(1, 1, n_examples*N)
-    return f0_hz, fc, on_offsets
+    
+    # fc_ex: different for every string
+    fc_ex = torch.Tensor([0.5, 0.4]).unsqueeze(0)
+    fc_ex = fc_ex.repeat(batch_size, 1).unsqueeze(-1).repeat(1, 1, n_examples*N)
+    return f0_hz, fc, on_offsets, fc_ex
 
 
 
 class TestCore(unittest.TestCase):
 
     def test_KS_synthetic_input(self):
-        save_output=False
+        save_output=True
         
         excitation_length=0.005
         n_examples = 2
@@ -71,7 +76,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, on_offsets = generateParameters(batch_size, n_examples, example_length, N, J)
+        f0_hz, fc, on_offsets, fc_ex = generateParameters(batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
                                   n_samples=M,
@@ -88,9 +93,11 @@ class TestCore(unittest.TestCase):
             f0_in = f0_hz[:, :, example * N : example * N + N]
             fc_in = fc[:, :, example * N : example * N + N]
             on_offsets_in = on_offsets[:, :, example * N : example * N + N]
+            fc_ex_in = fc_ex[:, :, example * N : example * N + N]
             controls = ks.get_controls(f0_in,
                                        fc_in,
-                                       on_offsets_in)
+                                       on_offsets_in,
+                                       fc_ex_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         
         mix = sources.sum(dim=1)
@@ -123,7 +130,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, on_offsets = generateParameters(batch_size, n_examples, example_length, N, J)
+        f0_hz, fc, on_offsets, fc_ex = generateParameters(batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
                                   n_samples=M,
@@ -140,6 +147,7 @@ class TestCore(unittest.TestCase):
                 f0_in = f0_hz[:, :, example * N : example * N + N]
                 fc_in = fc[:, :, example * N : example * N + N]
                 on_offsets_in = on_offsets[:, :, example * N : example * N + N]
+                fc_ex_in = fc_ex[:, :, example * N : example * N + N]
             
                 # Zeroing out the gradient
                 if fc_in.grad is not None:
@@ -147,7 +155,7 @@ class TestCore(unittest.TestCase):
                 # Set parameter to calculate gradient
                 fc_in.requires_grad = True
             
-                sources = ks(f0_in, fc_in, on_offsets_in)
+                sources = ks(f0_in, fc_in, on_offsets_in, fc_ex_in)
                 # Dummy cost function
                 error = sources.sum()
                 error.backward()
@@ -173,7 +181,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, on_offsets = generateParameters(batch_size, n_examples, example_length, N, J)
+        f0_hz, fc, on_offsets, fc_ex = generateParameters(batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
                                   n_samples=M,
@@ -190,14 +198,15 @@ class TestCore(unittest.TestCase):
                 f0_in = f0_hz[:, :, example * N : example * N + N]
                 fc_in = fc[:, :, example * N : example * N + N]
                 on_offsets_in = on_offsets[:, :, example * N : example * N + N]
-            
+                fc_ex_in = fc_ex[:, :, example * N : example * N + N]
+                
                 # Zeroing out the gradient
                 if fc_in.grad is not None:
                     fc_in.grad.zero_()
                 # Set parameter to calculate gradient
                 fc_in.requires_grad = True
             
-                sources = ks(f0_in, fc_in, on_offsets_in)
+                sources = ks(f0_in, fc_in, on_offsets_in, fc_ex_in)
                 # Dummy cost function
                 error = sources.sum()
                 error.backward()

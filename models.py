@@ -226,7 +226,7 @@ class KarplusStrongAutoencoder(_Model):
                  decoder_output_size=512,
                  bidirectional=True,
                  return_sources=False,
-                 return_fc=False):
+                 return_synth_controls=False):
         super().__init__()
 
         # attributes
@@ -237,7 +237,7 @@ class KarplusStrongAutoencoder(_Model):
         self.fft_size = fft_size
         self.hop_size = hop_size
         self.return_sources = return_sources
-        self.return_fc = return_fc
+        self.return_synth_controls = return_synth_controls
 
         # neural networks
         overlap = hop_size / fft_size
@@ -253,6 +253,8 @@ class KarplusStrongAutoencoder(_Model):
                                             hidden_size=decoder_hidden_size,
                                             output_size=decoder_output_size,
                                             bidirectional=bidirectional)
+        
+        self.fc_ex_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
         
         self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
         
@@ -286,7 +288,7 @@ class KarplusStrongAutoencoder(_Model):
         decoder_output_size = config['decoder_output_size'] if 'decoder_output_size' in keys else 512
         bidirectional = not config['unidirectional'] if 'unidirectional' in keys else True
         return_sources = config['return_sources'] if 'return_sources' in keys else False
-        return_fc = config['return_fc'] if 'return_fc' in keys else False
+        return_synth_controls = config['return_synth_controls'] if 'return_synth_controls' in keys else False
         
         return cls(batch_size=batch_size,
                    allowed_strings=allowed_strings,
@@ -301,9 +303,37 @@ class KarplusStrongAutoencoder(_Model):
                    decoder_output_size=decoder_output_size,
                    bidirectional=bidirectional,
                    return_sources=return_sources,
-                   return_fc=return_fc)
+                   return_synth_controls=return_synth_controls)
 
-    def forward(self, mix_in, f0_hz, return_fc=False):
+    def onset_detection(self, f0_hz):
+        """
+        on_offsets: Note onsets and offsets encoded as
+               0 -> 1 note onset
+               1 -> 0 offset
+               It behaves like a gate signal.
+               torch.tensor of shape [batch_size, n_strings, n_frames]
+        """
+        
+        # f0_hz [batch_size, n_freq_frames, n_sources]
+        
+        # Onsets and offsets are analyzed from f0 by now.
+        # 0 -> 1 note onset
+        # 1 -> 0 offset
+        # It behaves like a gate signal.
+        on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
+                                              torch.tensor(0., device=f0_hz.device))
+        
+        # Distinguish onsets = 1 from offsets = -1
+        # Differentiate the on_offsets gate signal
+        on_offsets = core.diff(on_offsets)
+        # Separate note onsets and offsets
+        onsets = torch.clamp(on_offsets, 0, 1)
+        #offsets = torch.clamp(on_offsets, -1, 0) * -1
+        # Convert onsets to sample indices: [batch, string, frame].
+        onset_frame_indices = torch.nonzero(onsets, as_tuple=False)
+        return onset_frame_indices
+
+    def forward(self, mix_in, f0_hz, return_synth_controls=False):
         # audio [batch_size, n_samples]
         # f0_hz [batch_size, n_freq_frames, n_sources]
         
@@ -316,35 +346,43 @@ class KarplusStrongAutoencoder(_Model):
 
 
         f0_hz = f0_hz.transpose(1, 2)  # [batch_size, n_sources, n_freq_frames]
+        
         f0_hz_dec = torch.reshape(f0_hz, (batch_size*n_sources, -1))  # [batch_size * n_sources, n_freq_frames]
         f0_hz_dec = f0_hz_dec.unsqueeze(-1)
-        
         x = self.decoder(f0_hz=f0_hz_dec, z=z)
         
         x_fc = self.fc_linear(x)
-        
-        # constrain fc from 0Hz to the half physical modeling sample rate
-        fc = core.exp_sigmoid(x_fc, max_value=(self.physical_modeling_sample_rate / 2))
+        fc = core.exp_sigmoid(x_fc)
         fc = fc.squeeze(-1)
         fc = torch.reshape(fc, (batch_size, n_sources, n_frames))
 
-        # Onsets and offsets are analyzed from f0 by now.
-        on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
-                                              torch.tensor(0., device=f0_hz.device))
+        onset_frame_indices = self.onset_detection(f0_hz)
 
+        # Predict the excitation filter cutoff frequency per onset.
+        fc_ex = self.fc_ex_decoder(x, onset_frame_indices)
 
-        # apply synthesis model
-        pm_sources = self.ks_synth(f0_hz=f0_hz, fc=fc, on_offsets=on_offsets)
+        # Apply the synthesis model.
+        pm_sources = self.ks_synth(f0_hz=f0_hz,
+                                   fc=fc,
+                                   onset_frame_indices=onset_frame_indices,
+                                   fc_ex=fc_ex)
         if self.sample_rate != self.physical_modeling_sample_rate:
             # Resample
             sources = self.resampler(pm_sources)
 
         mix_out = torch.sum(sources, dim=1)
 
-        if self.return_sources and (self.return_fc or return_fc):
-            return mix_out, sources, fc
-        if not self.return_sources and (self.return_fc or return_fc):
-            return mix_out, fc
+        synth_controls = {
+            'f0_hz': f0_hz,
+            'fc': fc,
+            'onset_frame_indices': onset_frame_indices,
+            'fc_ex': fc_ex
+        }
+
+        if self.return_sources and (self.return_synth_controls or return_synth_controls):
+            return mix_out, sources, synth_controls
+        if not self.return_sources and (self.return_synth_controls or return_synth_controls):
+            return mix_out, synth_controls
         if self.return_sources:
             return mix_out, sources
         return mix_out

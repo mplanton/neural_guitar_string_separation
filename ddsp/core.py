@@ -1502,10 +1502,8 @@ class SimpleLowpass:
     
     def clear_state(self):
         """
-        Set the internal state of the filter to zero
-        and detach from current graph.
+        Set the internal state of the filter to zero.
         """
-        self.alpha = self.alpha.detach()
         self.last_y = torch.zeros(*self.last_y.shape)
 
     def detach(self):
@@ -1565,10 +1563,8 @@ class SimpleHighpass:
     
     def clear_state(self):
         """
-        Set the internal state of the filter to zero
-        and detach from current graph.
+        Set the internal state of the filter to zero.
         """
-        self.alpha = self.alpha.detach()
         self.last_x = torch.zeros(*self.last_x.shape)
         self.last_y = torch.zeros(*self.last_y.shape)
 
@@ -1630,7 +1626,6 @@ class TimeDomainFIR:
         return y_n
     
     def clear_state(self):
-        self.h = self.h.detach()
         self.x = torch.zeros(*self.x.shape)
     
     def detach(self):

@@ -838,15 +838,15 @@ class KarplusStrong(processors.Processor):
                                  length=self.max_delay,
                                  sr=sample_rate)
         
-        # Lowpass
+        # Feedback lowpass
         self.lp = core.SimpleLowpass(batch_size=batch_size,
                                      n_filters=n_strings,
                                      sr=sample_rate)
-        # DC blocking Highpass
+        # DC blocking feedback highpass
         self.hp = core.SimpleHighpass(batch_size=batch_size,
                                       n_filters=n_strings,
                                       sr=sample_rate)
-        hp_fc = 5
+        hp_fc = 10
         self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
         
         # Excitation
@@ -857,12 +857,16 @@ class KarplusStrong(processors.Processor):
         #self.excitation = torch.linspace(-0.5, 0.5, self.n_excitation_samples)
         #self.excitation = torch.clamp(99999*self.excitation, min=-0.5, max=0.5)
         
+        # Excitation filter
+        self.lp_ex = core.SimpleLowpass(batch_size=1,
+                                        n_filters=1,
+                                        sr=sample_rate)
+        
         # An excitation signal may reach into the next train example.
         self.last_excitation_overhead = torch.zeros(batch_size,
                                                     n_strings,
                                                     self.n_excitation_samples)
         
-        self.diff = core.Diff(batch_size=batch_size, n_channels=n_strings)
         self.last_valid_f0 = torch.ones((batch_size, n_strings)) * min_freq
         
         # Internal state of the synth
@@ -870,37 +874,28 @@ class KarplusStrong(processors.Processor):
                 self.dl,
                 self.lp,
                 self.hp,
-                self.diff,
+                self.lp_ex,
                 self.last_valid_f0
             ]
     
-    def get_controls(self, f0_hz, fc, on_offsets):
+    def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
             f0_hz: Fundamental frequencies in Hertz,
-                   torch.tensor of shape [batch_size, n_strings, n_frames]
-            fc:    Loop filter cutoff frequency in Hertz,
-                   torch.tensor of shape [batch_size, n_strings, n_frames]
-            on_offsets: Note onsets and offsets encoded as
-                   0 -> 1 note onset
-                   1 -> 0 offset
-                   It behaves like a gate signal.
-                   torch.tensor of shape [batch_size, n_strings, n_frames]
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            fc:    Loop filter cutoff frequency scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            onset_frame_indices: Note onset frame indices to trigger excitation
+                signals. One index is [batch, string, onset_frame],
+                torch.tensor of shape [n_onset_indices, 3]
+            fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
+                   torch.Tensor of shape [n_onset_indices, 1]
         """
-        assert f0_hz.shape == fc.shape and fc.shape == on_offsets.shape, \
-            "Shapes of f0_hz, fc and on_offsets must be equal, but shapes " \
-            f"of f0_hz: {f0_hz.shape}, fc {fc.shape}, on_offsets: {on_offsets.shape}"
+        assert f0_hz.shape == fc.shape, \
+            "Shapes of f0_hz and fc must be equal, but shapes " \
+            f"of f0_hz: {f0_hz.shape}, fc {fc.shape}"
         n_frames = f0_hz.shape[2]
-        
-        # Distinguish onsets = 1 from offsets = -1
-        # Differentiate the on_offsets gate signal
-        on_offsets = self.diff(on_offsets)
-        # Separate note onsets and offsets
-        onsets = torch.clamp(on_offsets, 0, 1)
-        offsets = torch.clamp(on_offsets, -1, 0) * -1
-        # Convert onsets to sample indices: [batch, string, frame].
-        onset_frame_indices = torch.nonzero(onsets, as_tuple=False)
         
         # If note is off, stay at last valid fundamental frequency.
         for batch in range(self.batch_size):
@@ -911,6 +906,10 @@ class KarplusStrong(processors.Processor):
                     else:
                         self.last_valid_f0[batch, string] = f0_hz[batch, string, frame]
         
+        # Scale parameters
+        fc = fc * self.sample_rate / 2
+        fc_ex = fc_ex * self.sample_rate / 2
+        
         # Fundamental periods
         t0s = core.safe_divide(1, f0_hz)
         # Limit fundamental period to maximum delay
@@ -919,21 +918,23 @@ class KarplusStrong(processors.Processor):
         return {"t0s": t0s,
                 'fcs': fc,
                 'onset_frame_indices': onset_frame_indices,
-                'offsets': offsets}
+                'fcs_ex': fc_ex}
     
 
-    def get_signal(self, t0s, fcs, onset_frame_indices, offsets, **kwargs):
+    def get_signal(self, t0s, fcs, onset_frame_indices, fcs_ex, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
         Args:
             t0s: Fundamental periods of the played notes in seconds,
-                 torch.tensor of shape [batch_size, n_strings, n_frames]
+                 torch.Tensor of shape [batch_size, n_strings, n_frames]
             fcs: Loop filter cutoff frequency in Hertz,
-                 torch.tensor of shape [batch_size, n_strings, n_frames]
+                 torch.Tensor of shape [batch_size, n_strings, n_frames]
             onset_frame_indices: Note onset frame indices to trigger excitation
                 signals. One index is [batch, string, onset_frame],
                 torch.tensor of shape [n_onset_indices, 3]
+            fc_ex: Excitation filter cutoff frequency in Hertz,
+                torch.Tensor of shape [n_onset_indices, 1]
         
         Returns:
             The synthesized example of string sounds from the given parameters,
@@ -942,13 +943,21 @@ class KarplusStrong(processors.Processor):
         # Build excitations for the training example.
         excitation_block = torch.zeros((self.batch_size, self.n_strings,
                                         self.n_samples + self.n_excitation_samples))
-        for onset_index in onset_frame_indices:
+        for n, onset_index in enumerate(onset_frame_indices):
             batch = onset_index[0].item()
             string = onset_index[1].item()
             # Convert from frame rate to audio rate.
             start = onset_index[2].item() * self.audio_frame_size
             stop = start + self.n_excitation_samples
-            excitation_block[batch, string, start : stop] = self.excitation
+            # Filter the excitation signal
+            fc_ex = fcs_ex[n].unsqueeze(-1)
+            self.lp_ex.set_fc(fc_ex)
+            filtered_excitation = torch.zeros_like(self.excitation)
+            for i in range(self.n_excitation_samples):
+                x_in = self.excitation[..., i].unsqueeze(-1).unsqueeze(-1)
+                filtered_excitation[i] = self.lp_ex(x_in)
+            self.lp_ex.clear_state()
+            excitation_block[batch, string, start : stop] = filtered_excitation
         
         # Store excitation overhead for next example and resize the
         # excitation block to the correct length.
@@ -957,7 +966,7 @@ class KarplusStrong(processors.Processor):
         excitation_block = excitation_block[..., : -self.n_excitation_samples]
         
         # Synthesize audio for every frame
-        out = torch.zeros(*excitation_block.shape)
+        out = torch.zeros_like(excitation_block)
         f = torch.zeros((self.batch_size, self.n_strings))
         last_y = torch.zeros((self.batch_size, self.n_strings))
         n_frames = fcs.shape[2]
@@ -968,18 +977,19 @@ class KarplusStrong(processors.Processor):
             fc = fcs[:, :, frame_idx]
             self.lp.set_fc(fc)
             
-            # Synthesize one frame of audio
+            # Synthesize one frame of audio with the (extended) Karplus-Strong
+            # model.
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
+                excitation = excitation_block[..., offset + i]
                 f = self.hp(self.lp(self.dl(last_y)))
-                out[..., offset + i] = excitation_block[..., offset + i] + f
+                out[..., offset + i] = excitation + f
                 last_y = out[..., offset + i]
         return out
 
     def clear_state(self):
         """
-        Set the internal state of the synth to zero
-        and detach from current graph.
+        Set the internal state of the synth to zero.
         """
         for element in self.internal_state:
             if type(element) == torch.Tensor or type(element) == torch.tensor:
@@ -989,7 +999,7 @@ class KarplusStrong(processors.Processor):
     
     def detach(self):
         """
-        Detach from current graph and hold the internal state of the synth.
+        Detach the internal state of the synth from the current graph.
         """
         for element in self.internal_state:
             element.detach()

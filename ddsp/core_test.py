@@ -207,28 +207,23 @@ class TestCore(unittest.TestCase):
         sig_len = int(dur * sr)
         x = torch.rand((batch_size, n_sources, sig_len))
         
-        # Test both methods for detaching from the graph.
-        for method in range(2):
-            for i in range(sig_len):
-                x_in = x[..., i]
-                # Zeroing out the gradient
-                if x_in.grad is not None:
-                    x_in.grad.zero_()
-                
-                # Set parameter to calculate gradient
-                x_in.requires_grad = True
-                
-                y = dl(x_in)
-                
-                # Dummy cost function
-                error = y.sum()
-                error.backward()
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient
+            if x_in.grad is not None:
+                x_in.grad.zero_()
             
-                # Detach from current graph.
-                if method == 0:
-                    dl.clear_state()
-                else:
-                    dl.detach()
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            
+            y = dl(x_in)
+            
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+        
+            # Detach from current graph.
+            dl.detach()
     
     def test_simple_lowpass_differentiability(self):
         batch_size = 2
@@ -245,28 +240,23 @@ class TestCore(unittest.TestCase):
         sig_len = int(dur * sr)
         x = torch.rand((batch_size, n_sources, sig_len))
         
-        # Test both methods for detaching from the graph.
-        for method in range(2):
-            for i in range(sig_len):
-                x_in = x[..., i]
-                # Zeroing out the gradient
-                if x_in.grad is not None:
-                    x_in.grad.zero_()
-                
-                # Set parameter to calculate gradient
-                x_in.requires_grad = True
-                
-                y = filt(x_in)
-                
-                # Dummy cost function
-                error = y.sum()
-                error.backward()
-                
-                # Detach from current graph.
-                if method == 0:
-                    filt.clear_state()
-                else:
-                    filt.detach()
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            
+            y = filt(x_in)
+            
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+            
+            # Detach from current graph.
+            filt.detach()
     
     def test_simple_highpass_differentiability(self):
         batch_size = 2
@@ -282,29 +272,24 @@ class TestCore(unittest.TestCase):
         dur = 0.02 # sec
         sig_len = int(dur * sr)
         x = torch.rand((batch_size, n_sources, sig_len))
-        
-        # Test both methods for detaching from the graph.
-        for method in range(2):
-            for i in range(sig_len):
-                x_in = x[..., i]
-                # Zeroing out the gradient
-                if x_in.grad is not None:
-                    x_in.grad.zero_()
-                
-                # Set parameter to calculate gradient
-                x_in.requires_grad = True
-                
-                y = filt(x_in)
-                
-                # Dummy cost function
-                error = y.sum()
-                error.backward()
-                
-                # Detach from current graph.
-                if method == 0:
-                    filt.clear_state()
-                else:
-                    filt.detach()
+
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            
+            y = filt(x_in)
+            
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+            
+            # Detach from current graph.
+            filt.detach()
 
     def test_sinc(self):
         x = torch.cat((torch.ones(1), torch.zeros(10)))
@@ -421,29 +406,24 @@ class TestCore(unittest.TestCase):
         dur = 0.02 # sec
         sig_len = int(dur * sr)
         x = torch.rand((batch_size, n_sources, sig_len)) * 2 - 1
-        
-        # Test both methods for detaching from the graph.
-        for method in range(2):
-            for i in range(sig_len):
-                x_in = x[..., i]
-                # Zeroing out the gradient
-                if x_in.grad is not None:
-                    x_in.grad.zero_()
-                
-                # Set parameter to calculate gradient
-                x_in.requires_grad = True
-                
-                y = filt(x_in)
-                
-                # Dummy cost function
-                error = y.sum()
-                error.backward()
-                
-                # Detach from current graph.
-                if method == 0:
-                    filt.clear_state()
-                else:
-                    filt.detach()
+
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            
+            y = filt(x_in)
+            
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+            
+            # Detach from current graph.
+            filt.detach()
 
 if __name__ == '__main__':
     test = TestCore()
