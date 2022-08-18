@@ -337,6 +337,9 @@ class KarplusStrongAutoencoder(_Model):
         # audio [batch_size, n_samples]
         # f0_hz [batch_size, n_freq_frames, n_sources]
         
+        # Detach from computation graph, so we do not run out of memory.
+        self.detach()
+        
         mix_in = mix_in.squeeze(dim=1)
         
         z = self.encoder(mix_in, f0_hz)  # [batch_size, n_frames, n_sources, embedding_size]
@@ -373,10 +376,10 @@ class KarplusStrongAutoencoder(_Model):
         mix_out = torch.sum(sources, dim=1)
 
         synth_controls = {
-            'f0_hz': f0_hz,
-            'fc': fc,
-            'onset_frame_indices': onset_frame_indices,
-            'fc_ex': fc_ex
+            'f0_hz': f0_hz.detach(),
+            'fc': fc.detach(),
+            'onset_frame_indices': onset_frame_indices.detach(),
+            'fc_ex': fc_ex.detach()
         }
 
         if self.return_sources and (self.return_synth_controls or return_synth_controls):
@@ -389,7 +392,8 @@ class KarplusStrongAutoencoder(_Model):
 
     def detach(self):
         """
-        Detach from computation graph to not run out of RAM.
+        Detach from current computation graph to stop gradient following and
+        not to run out of RAM.
         """
         self.ks_synth.detach()
 

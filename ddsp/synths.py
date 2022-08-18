@@ -846,38 +846,56 @@ class KarplusStrong(processors.Processor):
         self.hp = core.SimpleHighpass(batch_size=batch_size,
                                       n_filters=n_strings,
                                       sr=sample_rate)
-        hp_fc = 10
+        hp_fc = 5
         self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
         
         # Excitation
         self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
         # Use just white noise as excitation signal by now...
         self.excitation = torch.rand(self.n_excitation_samples) * 2 - 1
-        #DBG
-        #self.excitation = torch.linspace(-0.5, 0.5, self.n_excitation_samples)
-        #self.excitation = torch.clamp(99999*self.excitation, min=-0.5, max=0.5)
+        self.filtered_excitation = torch.zeros_like(self.excitation)
         
         # Excitation filter
         self.lp_ex = core.SimpleLowpass(batch_size=1,
                                         n_filters=1,
                                         sr=sample_rate)
         
+        self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
+                                        self.n_samples + self.n_excitation_samples))
         # An excitation signal may reach into the next train example.
         self.last_excitation_overhead = torch.zeros(batch_size,
                                                     n_strings,
                                                     self.n_excitation_samples)
         
         self.last_valid_f0 = torch.ones((batch_size, n_strings)) * min_freq
-        
-        # Internal state of the synth
-        self.internal_state = [
-                self.dl,
-                self.lp,
-                self.hp,
-                self.lp_ex,
-                self.last_valid_f0
-            ]
     
+    def detach(self):
+        """
+        Detach the internal state of the synth from the current graph.
+        """
+        # DDSP objects
+        self.dl.detach()
+        self.lp.detach()
+        self.hp.detach()
+        self.lp_ex.detach()
+        
+        # Pytorch tensors
+        self.filtered_excitation = self.filtered_excitation.detach()
+        self.excitation_block = self.excitation_block.detach()
+        self.last_excitation_overhead = self.last_excitation_overhead.detach()
+        
+    
+    def clear_state(self):
+        """
+        Set the internal state of the synth to zero.
+        """
+        for element in self.internal_state:
+            if type(element) == torch.Tensor or type(element) == torch.tensor:
+                element = torch.zeros(*element.shape)
+            else:
+                element.clear_state()
+    
+
     def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
@@ -941,7 +959,7 @@ class KarplusStrong(processors.Processor):
             torch.tensor of shape [batch_size, n_strings, n_samples]
         """
         # Build excitations for the training example.
-        excitation_block = torch.zeros((self.batch_size, self.n_strings,
+        self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
                                         self.n_samples + self.n_excitation_samples))
         for n, onset_index in enumerate(onset_frame_indices):
             batch = onset_index[0].item()
@@ -952,21 +970,21 @@ class KarplusStrong(processors.Processor):
             # Filter the excitation signal
             fc_ex = fcs_ex[n].unsqueeze(-1)
             self.lp_ex.set_fc(fc_ex)
-            filtered_excitation = torch.zeros_like(self.excitation)
+            self.filtered_excitation = torch.zeros_like(self.excitation)
             for i in range(self.n_excitation_samples):
                 x_in = self.excitation[..., i].unsqueeze(-1).unsqueeze(-1)
-                filtered_excitation[i] = self.lp_ex(x_in)
+                self.filtered_excitation[i] = self.lp_ex(x_in)
             self.lp_ex.clear_state()
-            excitation_block[batch, string, start : stop] = filtered_excitation
+            self.excitation_block[batch, string, start : stop] = self.filtered_excitation
         
         # Store excitation overhead for next example and resize the
         # excitation block to the correct length.
-        excitation_block[..., :self.n_excitation_samples] += self.last_excitation_overhead
-        self.last_excitation_overhead = excitation_block[..., -self.n_excitation_samples:]
-        excitation_block = excitation_block[..., : -self.n_excitation_samples]
+        self.excitation_block[..., :self.n_excitation_samples] += self.last_excitation_overhead
+        self.last_excitation_overhead = self.excitation_block[..., -self.n_excitation_samples:]
+        self.excitation_block = self.excitation_block[..., : -self.n_excitation_samples]
         
         # Synthesize audio for every frame
-        out = torch.zeros_like(excitation_block)
+        out = torch.zeros_like(self.excitation_block)
         f = torch.zeros((self.batch_size, self.n_strings))
         last_y = torch.zeros((self.batch_size, self.n_strings))
         n_frames = fcs.shape[2]
@@ -981,25 +999,8 @@ class KarplusStrong(processors.Processor):
             # model.
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
-                excitation = excitation_block[..., offset + i]
+                excitation = self.excitation_block[..., offset + i]
                 f = self.hp(self.lp(self.dl(last_y)))
                 out[..., offset + i] = excitation + f
                 last_y = out[..., offset + i]
         return out
-
-    def clear_state(self):
-        """
-        Set the internal state of the synth to zero.
-        """
-        for element in self.internal_state:
-            if type(element) == torch.Tensor or type(element) == torch.tensor:
-                element = torch.zeros(*element.shape)
-            else:
-                element.clear_state()
-    
-    def detach(self):
-        """
-        Detach the internal state of the synth from the current graph.
-        """
-        for element in self.internal_state:
-            element.detach()

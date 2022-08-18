@@ -8,53 +8,86 @@ import synths, core
 import unittest
 
 
-def generateParameters(batch_size, n_examples, example_length, N, J):
+def expand_constant(source_constants, n_examples, batch_size, n_frames):
+    y = source_constants.unsqueeze(-1).repeat(1, n_frames)
+    y = y.unsqueeze(0).repeat(batch_size, 1, 1)
+    y = y.unsqueeze(0).repeat(n_examples, 1, 1, 1)
+    return y
+
+def generateParameters(frame_rate, batch_size, n_examples, example_length, n_frames, n_sources):
     """
-    Build network output -> synth input
+    Build neural network output -> synth input.
     Constant parameters for every string.
     
     Args:
+        frame_rate: frame rate of the model in Hz
         batch_size: batch size
         n_examples: number of training examples
         example_length: length of the generated examples in seconds
-        N: Number of STFT time frames per train example
-        J: Number of sources in the mix
+        n_frames: Number of STFT time frames per train example
+        n_sources: Number of sources in the mix
+    
+    Returns:
+        f0_hz: Fundamental frequencies in Hertz,
+               torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+        fc:    Loop filter cutoff frequency scaled to [0, 1],
+               torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+        onset_frame_indices: Note onset frame indices to trigger excitation
+            signals. One index is [batch, string, onset_frame],
+            torch.tensor of shape [n_examples, n_onset_indices, 3]
+        fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
+               torch.Tensor of shape [n_examples, n_onset_indices, 1]
     """
+    # onset_frame_indices: Note onset frame indices to trigger excitation
+    #     signals. One index is [batch, string, onset_frame],
+    #     torch.tensor of shape [n_examples, n_onset_indices, 3]
+    
+    # Make onsets for one example at every quarter second.
+    f_onsets = 4 # Hz
+    onset_times = torch.arange(0, example_length, 1 / f_onsets)
+    onset_frames = (onset_times * frame_rate).type(torch.int) # [n_onset_indices]
+    
+    n_onset_indices = onset_frames.shape[-1]
+    onset_frame_indices = torch.zeros((n_onset_indices, 3))
+    for n in range(n_onset_indices):
+        batch = n % batch_size
+        string = n % n_sources
+        onset_frame_indices[n] = torch.tensor([batch, string, onset_frames[n]])
+    
+    onset_frame_indices = onset_frame_indices.unsqueeze(0).repeat(n_examples, 1, 1)
+    onset_frame_indices = onset_frame_indices.type(torch.int)
+    
+    # f0_hz: Fundamental frequencies in Hertz,
+    #        torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+    f0_min = 100
+    f0_max = 500
+    f0s = torch.linspace(f0_min, f0_max, n_sources)
+    f0_hz = expand_constant(f0s, n_examples, batch_size, n_frames)
+   
+    # fc:    Loop filter cutoff frequency scaled to [0, 1],
+    #        torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+    fc_min = 200
+    fc_max = 5000
+    fcs = torch.linspace(fc_min, fc_max, n_sources)
+    fc = expand_constant(fcs, n_examples, batch_size, n_frames)
     
     
-    # f0: Play a transposed chord per batch
-    chord = torch.tensor([60, 64]) # Cmaj9
-    transposes = torch.arange(batch_size)
-    midi = []
-    for transpose in transposes:
-        midi.append(chord + transpose)
-    midi = torch.stack(midi, dim=0).unsqueeze(-1).repeat(1, 1, n_examples*N)
-    f0_hz = core.midi_to_hz(midi)
+    # fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
+    #        torch.Tensor of shape [n_examples, n_onset_indices, 1]
+    fc_min = 200
+    fc_max = 5000
+    fc_ex = torch.linspace(fc_min, fc_max, n_onset_indices)
+    fc_ex = fc_ex.unsqueeze(0).repeat(n_examples, 1).unsqueeze(-1)
     
-    # Add a rhythm by setting f0 to zero
-    beat_freq = 1 # 60bpm
-    t = torch.linspace(0, n_examples * example_length, n_examples * N)
-    rhythm_mask = torch.clamp(9999999 * torch.sin(2 * np.pi * beat_freq * t), 0, 1)
-    rhythm_mask = rhythm_mask.unsqueeze(0).repeat(J, 1).unsqueeze(0).repeat(batch_size, 1, 1)
-    
-    f0_hz = rhythm_mask * f0_hz
-    #plt.plot(f0_hz[0, 0].numpy())
-    
-    # Onsets and offsets are analyzed from f0 by now.
-    on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
-                                          torch.tensor(0., device=f0_hz.device))
-    #plt.plot(on_offsets[0, 0].numpy())
-    #plt.title("on off")
-    
-    # fc: different for every string
-    fc = torch.Tensor([0.8, 0.9]).unsqueeze(0)
-    fc = fc.repeat(batch_size, 1).unsqueeze(-1).repeat(1, 1, n_examples*N)
-    
-    # fc_ex: different for every string
-    fc_ex = torch.Tensor([0.5, 0.4]).unsqueeze(0)
-    fc_ex = fc_ex.repeat(batch_size, 1).unsqueeze(-1).repeat(1, 1, n_examples*N)
-    return f0_hz, fc, on_offsets, fc_ex
+    return f0_hz, fc, onset_frame_indices, fc_ex
 
+
+def check_attributes_for_gradients(object):
+    """
+    Check the attributes of an object for requiering a gradient.
+    """
+    attributes = object.__dict__
+    print(attributes)
 
 
 class TestCore(unittest.TestCase):
@@ -66,17 +99,20 @@ class TestCore(unittest.TestCase):
         n_examples = 2
         batch_size = 2
         sr = 16000
-        example_length = 0.16 # sec
+        example_length = 2
+        #example_length = 0.16 # sec
         # Number of sources in the mix
-        J = 2
+        J = 6
         # The FFT hop size is the audio frame length
         fft_hop_size = 256
+        frame_rate = sr // fft_hop_size
         # Nuber of time samples per train example
         M = int(example_length * sr)
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, on_offsets, fc_ex = generateParameters(batch_size, n_examples, example_length, N, J)
+        f0_hz, fc, onset_frame_indices, fc_ex = \
+            generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
                                   n_samples=M,
@@ -90,16 +126,16 @@ class TestCore(unittest.TestCase):
         sources = torch.zeros((batch_size, J, n_examples * M))
         for example in range(n_examples):
             #print("Calculate example", example)
-            f0_in = f0_hz[:, :, example * N : example * N + N]
-            fc_in = fc[:, :, example * N : example * N + N]
-            on_offsets_in = on_offsets[:, :, example * N : example * N + N]
-            fc_ex_in = fc_ex[:, :, example * N : example * N + N]
+            
+            f0_in = f0_hz[example]
+            fc_in = fc[example]
+            onset_frame_indices_in = onset_frame_indices[example]
+            fc_ex_in = fc_ex[example]
             controls = ks.get_controls(f0_in,
                                        fc_in,
-                                       on_offsets_in,
+                                       onset_frame_indices_in,
                                        fc_ex_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
-        
         mix = sources.sum(dim=1)
         
         # Save mix and sources
@@ -125,12 +161,14 @@ class TestCore(unittest.TestCase):
         J = 2
         # The FFT hop size is the audio frame length
         fft_hop_size = 256
+        frame_rate = sr // fft_hop_size
         # Nuber of time samples per train example
         M = int(example_length * sr)
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, on_offsets, fc_ex = generateParameters(batch_size, n_examples, example_length, N, J)
+        f0_hz, fc, onset_frame_indices, fc_ex = \
+            generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
                                   n_samples=M,
@@ -140,88 +178,41 @@ class TestCore(unittest.TestCase):
                                   min_freq=20,
                                   excitation_length=excitation_length)
         
-        # Test both methods for detaching from the graph.
-        for method in range(2):
-            for example in range(n_examples):
-                #print("Calculate example", example)
-                f0_in = f0_hz[:, :, example * N : example * N + N]
-                fc_in = fc[:, :, example * N : example * N + N]
-                on_offsets_in = on_offsets[:, :, example * N : example * N + N]
-                fc_ex_in = fc_ex[:, :, example * N : example * N + N]
+        for example in range(n_examples):
+            #print("Calculate example", example)
+            f0_in = f0_hz[example]
+            fc_in = fc[example]
+            onset_frame_indices_in = onset_frame_indices[example]
+            fc_ex_in = fc_ex[example]
             
-                # Zeroing out the gradient
-                if fc_in.grad is not None:
-                    fc_in.grad.zero_()
-                # Set parameter to calculate gradient
-                fc_in.requires_grad = True
-            
-                sources = ks(f0_in, fc_in, on_offsets_in, fc_ex_in)
-                # Dummy cost function
-                error = sources.sum()
-                error.backward()
-            
-                # Disable gradient tracking.
-                if method == 0:
-                    ks.clear_state()
-                else:
-                    ks.detach()
+            #check_attributes_for_gradients(ks)
 
-    def test_KS_RAM_usage(self):
-        excitation_length=0.005
-        n_examples = 2
-        batch_size = 2
-        sr = 16000
-        example_length = 0.16 # sec
-        # Number of sources in the mix
-        J = 2
-        # The FFT hop size is the audio frame length
-        fft_hop_size = 256
-        # Nuber of time samples per train example
-        M = int(example_length * sr)
-        # Number of STFT time frames per train example
-        N = int(M / fft_hop_size)
-        
-        f0_hz, fc, on_offsets, fc_ex = generateParameters(batch_size, n_examples, example_length, N, J)
-        
-        ks = synths.KarplusStrong(batch_size=batch_size,
-                                  n_samples=M,
-                                  sample_rate=sr,
-                                  audio_frame_size=fft_hop_size,
-                                  n_strings=J,
-                                  min_freq=20,
-                                  excitation_length=excitation_length)
-        
-        # Test both methods for detaching from the graph.
-        for method in range(2):
-            for example in range(n_examples):
-                #print("Calculate example", example)
-                f0_in = f0_hz[:, :, example * N : example * N + N]
-                fc_in = fc[:, :, example * N : example * N + N]
-                on_offsets_in = on_offsets[:, :, example * N : example * N + N]
-                fc_ex_in = fc_ex[:, :, example * N : example * N + N]
-                
-                # Zeroing out the gradient
-                if fc_in.grad is not None:
-                    fc_in.grad.zero_()
-                # Set parameter to calculate gradient
-                fc_in.requires_grad = True
+            # Zeroing out the gradient
+            if fc_in.grad is not None:
+                fc_in.grad.zero_()
+            if fc_ex_in.grad is not None:
+                fc_ex_in.grad.zero_()
             
-                sources = ks(f0_in, fc_in, on_offsets_in, fc_ex_in)
-                # Dummy cost function
-                error = sources.sum()
-                error.backward()
+            # Set parameter to calculate gradient
+            fc_in.requires_grad = True
+            fc_ex_in.requires_grad = True
+        
+            sources = ks(f0_in, fc_in, onset_frame_indices_in, fc_ex_in)
+            # Dummy cost function
+            error = sources.sum()
             
-                # Disable gradient tracking.
-                if method == 0:
-                    ks.clear_state()
-                else:
-                    ks.detach()
+            #print("Do backward pass.")
+            error.backward()
+        
+            # Disable gradient tracking.
+            ks.detach()
+
 
 if __name__ == "__main__":
     test = TestCore()
     
-    unittest.main()
+    #unittest.main()
     
-    #test.test_KS_synthetic_input()
+    test.test_KS_synthetic_input()
     #test.test_KS_differentiability()
     

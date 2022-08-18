@@ -1453,6 +1453,7 @@ class DelayLine:
         and detach from current graph.
         """
         self.buffer = self.buffer.detach()
+        return self
 
 
 # Extension to the DDSP library for physical modeling
@@ -1513,6 +1514,7 @@ class SimpleLowpass:
         """
         self.alpha = self.alpha.detach()
         self.last_y = self.last_y.detach()
+        return self
 
 # Extension to the DDSP library for physical modeling
 class SimpleHighpass:
@@ -1576,6 +1578,7 @@ class SimpleHighpass:
         self.alpha = self.alpha.detach()
         self.last_x = self.last_x.detach()
         self.last_y = self.last_y.detach()
+        return self
 
 
 # Extension to the DDSP library for physical modeling
@@ -1631,6 +1634,7 @@ class TimeDomainFIR:
     def detach(self):
         self.h = self.h.detach()
         self.x = self.x.detach()
+        return self
 
 
 def slice(input, begin, size):

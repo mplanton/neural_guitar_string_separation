@@ -23,7 +23,7 @@ from ddsp import losses
 
 tqdm.monitor_interval = 0
 
-def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
+def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer): # DBG added writer
     loss_container = utils.AverageMeter()
     network.train()
     if args.loss_lsf_weight > 0: network.return_lsf = True
@@ -35,6 +35,7 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
         f0 = d[1]  # f0
         x, f0 = x.to(device), f0.to(device)
         optimizer.zero_grad()
+        
         y_hat = network(x, f0)
 
         loss = 0.
@@ -67,9 +68,6 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict):
         
         loss.backward()
         optimizer.step()
-        # Detach from computation graph, so we do not run out of memory.
-        if args.dataset == "Guitarset":
-            network.detach()
         loss_container.update(loss.item(), f0.size(0))
     return loss_container.avg
 
@@ -468,7 +466,7 @@ def main():
         if args.shuffle_songs == True:
             shuffle_songs(train_sampler, valid_sampler, args)
 
-        train_loss = train(args, model_to_train, device, train_sampler, optimizer, ss_weights_dict)
+        train_loss = train(args, model_to_train, device, train_sampler, optimizer, ss_weights_dict, writer) # DBG added writer
 
         # calculate validation loss only if model is not optimized on one single example
         if args.one_example or args.one_batch or (args.dataset == 'synthetic'):

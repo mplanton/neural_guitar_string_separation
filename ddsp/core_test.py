@@ -230,11 +230,12 @@ class TestCore(unittest.TestCase):
         n_sources = 3
         fc = 2500
         sr = 16000
-
+        
+        # Normally we predict fc with a network and pass it to the filter.
+        
         fcs = torch.ones((batch_size, n_sources)) * fc
         
         filt = core.SimpleLowpass(batch_size, n_sources, sr)
-        filt.set_fc(fcs)
         
         dur = 0.02 # sec
         sig_len = int(dur * sr)
@@ -242,54 +243,62 @@ class TestCore(unittest.TestCase):
         
         for i in range(sig_len):
             x_in = x[..., i]
-            # Zeroing out the gradient
+            # Zeroing out the gradient (this is normally done with the optimizer)
             if x_in.grad is not None:
                 x_in.grad.zero_()
+            if fcs.grad is not None:
+                fcs.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
             
             # Set parameter to calculate gradient
             x_in.requires_grad = True
+            fcs.requires_grad = True
+            filt.set_fc(fcs)
             
             y = filt(x_in)
-            
+
             # Dummy cost function
             error = y.sum()
             error.backward()
-            
-            # Detach from current graph.
-            filt.detach()
+
     
     def test_simple_highpass_differentiability(self):
         batch_size = 2
         n_sources = 3
         fc = 2500
         sr = 16000
-
+        
+        # Normally we predict fc with a network and pass it to the filter.
+        
         fcs = torch.ones((batch_size, n_sources)) * fc
         
         filt = core.SimpleHighpass(batch_size, n_sources, sr)
-        filt.set_fc(fcs)
         
         dur = 0.02 # sec
         sig_len = int(dur * sr)
         x = torch.rand((batch_size, n_sources, sig_len))
-
+        
         for i in range(sig_len):
             x_in = x[..., i]
-            # Zeroing out the gradient
+            # Zeroing out the gradient (this is normally done with the optimizer)
             if x_in.grad is not None:
                 x_in.grad.zero_()
+            if fcs.grad is not None:
+                fcs.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
             
             # Set parameter to calculate gradient
             x_in.requires_grad = True
+            fcs.requires_grad = True
+            filt.set_fc(fcs)
             
             y = filt(x_in)
-            
+
             # Dummy cost function
             error = y.sum()
             error.backward()
-            
-            # Detach from current graph.
-            filt.detach()
 
     def test_sinc(self):
         x = torch.cat((torch.ones(1), torch.zeros(10)))
@@ -412,18 +421,20 @@ class TestCore(unittest.TestCase):
             # Zeroing out the gradient
             if x_in.grad is not None:
                 x_in.grad.zero_()
+            if fcs.grad is not None:
+                fcs.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
             
             # Set parameter to calculate gradient
             x_in.requires_grad = True
+            fcs.requires_grad = True
             
             y = filt(x_in)
             
             # Dummy cost function
             error = y.sum()
             error.backward()
-            
-            # Detach from current graph.
-            filt.detach()
 
 if __name__ == '__main__':
     test = TestCore()
