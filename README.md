@@ -1,4 +1,4 @@
-# Unsupervised Audio Source Separation Using Differentiable Parametric Source Models
+# Unsupervised Audio Source Separation Using Differentiable Parametric Source Models	
 
 This is the source code for the experiments related to the paper [Unsupervised Audio Source Separation Using Differentiable Parametric Source Models](https://arxiv.org/abs/2201.09592).  
 
@@ -60,8 +60,7 @@ This bash script takes the trained model and
 * does inference.
 
         Usage: examination.sh <trained-model-path> <test-set> <'list.wav of.wav test.wav fil    es.wav'>
-        bash examination.sh trained_models/KarplusStrong_ex1/ Guitarset \
-        '05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav'
+        bash examination.sh trained_models/KarplusStrong_ex1/ Guitarset '05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav'
 
 (Do not forget the apostrophes around the list of test files.)
 It does so by executing the following python scripts (plot_learning_curves.py, eval.py, eval_show_stats.py, inference.py, etc.).
@@ -69,7 +68,6 @@ It does so by executing the following python scripts (plot_learning_curves.py, e
 
 ## Evaluation
 
-        python eval.py --tag 'TAG' --f0-from-mix --test-set 'CSD' --no-baselines
         python eval.py --tag 'KarplusStrong_ex1' --test-set 'Guitarset'
 
 ### Show statistics of evaluation
@@ -87,8 +85,7 @@ Plots are saved under `eval_compare/date/`.
 
 ## Inference
 
-        python inference.py --tag 'TAG' --test-set CSD --song-name 'El Rossinyol'
-        python inference.py --tag 'TAG' --test-set Guitarset --song-names 05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav
+        python inference.py --tag 'TAG' --which 'best' --test-set Guitarset --song-names 05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav
 
 
 ## Acknowledgment

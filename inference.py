@@ -3,7 +3,6 @@
 
 import torch
 from torch.utils.data import DataLoader
-import torchaudio
 import numpy as np
 import os
 import tqdm
@@ -20,8 +19,27 @@ from data import CSDSongDataset as CSDSongDataset
 from data import Guitarset as Guitarset
 
 
+def convert_onsets_to_global_inexing(local_onset_list, batch_size, n_sources):
+    """
+    Convert a list of frame-local onset_frame_indices of shape [n_onsets, 3]
+    with indices [batch, string, frame] to global inices.
+    """
+    frame_counters = np.zeros((batch_size, n_sources))
+    
+    global_onsets = []
+    for onset_frame in local_onset_list:
+        for batch, string, frame in onset_frame.numpy():
+             frame_counters[batch, string] += frame
+             global_onsets.append(
+                 np.int_([batch, string, frame_counters[batch, string]]))
+    out = np.concatenate(global_onsets)
+    out = np.reshape(out, (-1, 3))
+    return out
+    
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--tag', type=str, help="Model tag defined in the config at training time.")
+parser.add_argument('--which', type=str, choices=['best', 'last'], help="Load the 'best' or 'last' trained model.")
 parser.add_argument('--test-set', type=str, choices=['CSD', 'Guitarset'], help="Dataset used for inference.")
 parser.add_argument('--song-names', type=str, nargs='*', help="Song names of the specified dataset used for inference.")
 args, _ = parser.parse_known_args()
@@ -30,7 +48,7 @@ tag = args.tag
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # load trained model
-trained_model, model_args = utils.load_model(tag, device, return_args=True)
+trained_model, model_args = utils.load_model(tag, which=args.which, device=device, return_args=True)
 trained_model.return_sources = True
 
 batch_size = model_args['batch_size']
@@ -81,16 +99,26 @@ elif args.test_set == "Guitarset":
 target_sources_slices = []
 source_estimates_slices = []
 source_estimates_masking_slices = []
-fcs = []
 
+# Synth controls
+f0_hz = []
+fc = []
+onset_frame_indices = []
+fc_ex = []
+
+
+trained_model.eval()
 pbar = tqdm.tqdm(loader)
 for mix_slice, freqs_slice, sources_slice in pbar:
     batch_len = mix_slice.shape[0]
     with torch.no_grad():
-        mix_estimate_slice, source_estimates_slice, fc = \
-            trained_model(mix_slice, freqs_slice, return_fc=True)
+        mix_estimate_slice, source_estimates_slice, ctl = \
+            trained_model(mix_slice, freqs_slice, return_synth_controls=True)
     #print("DBG: fc:", fc)
-    fcs.append(fc)
+    f0_hz.append(ctl['f0_hz'])
+    fc.append(ctl['fc'])
+    onset_frame_indices.append(ctl['onset_frame_indices'])
+    fc_ex.append(ctl['fc_ex'])
     
     # [batch_size * n_sources, n_samples]
     source_estimates_masking_slice = utils.masking_from_synth_signals_torch(mix_slice, source_estimates_slice, n_fft=2048, n_hop=256)
@@ -99,22 +127,19 @@ for mix_slice, freqs_slice, sources_slice in pbar:
     source_estimates_masking_slices.append(source_estimates_masking_slice)
     target_sources_slices.append(torch.transpose(sources_slice, 1, 2))
 
+
 # assemble the outputs to continuous signals
 source_estimates = torch.cat(source_estimates_slices, dim=-1).numpy()
 source_estimates_masking = torch.cat(source_estimates_masking_slices, dim=-1).numpy()
 target_sources = torch.cat(target_sources_slices, dim=-1).numpy()
-fcs = torch.cat(fcs, dim=-1).numpy()
 
-out_path = "inference/" + tag
-os.makedirs("inference", exist_ok=True)
+f0_hz = torch.cat(f0_hz, dim=-1).numpy()
+fc = torch.cat(fc, dim=-1).numpy()
+global_onset_frame_indices = convert_onsets_to_global_inexing(onset_frame_indices, batch_size, n_sources)
+fc_ex = torch.cat(fc_ex).numpy()
+
+out_path = "inference/" + tag + '_' + args.which
 os.makedirs(out_path, exist_ok=True)
-
-# Get voice declaration -> is currently not used
-# if args.test_set == "CSD":
-#     voice_dict = {'b':'Bajos', 'a':'ContraAlt', 's':'Soprano', 't':'Tenor'}
-#     voice_list = [voice_dict[key] for key in ('b', 'a', 's', 't')]
-# elif args.test_set == "Guitarset":
-#     voice_list = model_args['allowed_strings']
 
 # Save files.
 for batch in range(batch_size):
@@ -129,7 +154,10 @@ for batch in range(batch_size):
                   rate=16000,
                   data=target_sources[batch].T)
 
-np.save(out_path + "/fcs.npy", fcs)
+np.save(out_path + "/f0_hz.npy", f0_hz) # [batch_size, n_sources, n_frames]
+np.save(out_path + "/fc.npy", fc)       # [batch_size, n_sources, n_frames]
+np.save(out_path + "/onset_frame_indices.npy", global_onset_frame_indices) # [n_onsets, 3]
+np.save(out_path + "/fc_ex.npy", fc_ex) # [n_onsets, 1]
 
 f_name = "inference_songs.json"
 with open(os.path.join(out_path, f_name), "w") as file:

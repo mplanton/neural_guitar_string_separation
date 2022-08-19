@@ -197,20 +197,35 @@ class EarlyStopping(object):
             self.is_better = lambda a, best: a > best + min_delta
 
 
-def load_model(tag, device='cpu', return_args=False):
+def load_model(tag, which='best', device='cpu', return_args=False):
     """
-
+    Load the trained model from disc.
+    
+    Args:
+        tag: Model tag
+        which: Load the 'best' or the 'last' trained model
+        device: Computation device
+        return_args: Return model arguments
     """
+    assert which in ['best', 'last']
+    
     model_path = 'trained_models/{}'.format(tag)
     # load model from disk
     with open(Path(model_path, tag + '.json'), 'r') as stream:
         results = json.load(stream)
 
-    target_model_path = next(Path(model_path).glob("%s*.pth" % tag))
-    state = torch.load(
-        target_model_path,
-        map_location=device
-    )
+    if which == 'best':
+        target_model_path = next(Path(model_path).glob("%s*.pth" % tag))
+        state = torch.load(
+            target_model_path,
+            map_location=device
+        )
+    elif which == 'last':
+        target_model_path = next(Path(model_path).glob("%s*.chkpnt" % tag))
+        state = torch.load(
+            target_model_path,
+            map_location=device
+        )['state_dict']
 
     architecture = results['args']['architecture']
     model_class = model_utls.ModelLoader.get_model(architecture)

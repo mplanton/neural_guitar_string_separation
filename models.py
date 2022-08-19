@@ -307,11 +307,11 @@ class KarplusStrongAutoencoder(_Model):
 
     def onset_detection(self, f0_hz):
         """
-        on_offsets: Note onsets and offsets encoded as
-               0 -> 1 note onset
-               1 -> 0 offset
-               It behaves like a gate signal.
-               torch.tensor of shape [batch_size, n_strings, n_frames]
+        Detect note onsets from the fundamental frequency.
+        
+        Returns:
+            onset_frame_indices: torch.tensor of shape [n_onsets, 3] with the
+            onsets [batch, string, frame]
         """
         
         # f0_hz [batch_size, n_freq_frames, n_sources]
