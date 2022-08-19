@@ -23,7 +23,7 @@ from ddsp import losses
 
 tqdm.monitor_interval = 0
 
-def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer): # DBG added writer
+def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer, epoch):
     loss_container = utils.AverageMeter()
     network.train()
     if args.loss_lsf_weight > 0: network.return_lsf = True
@@ -69,6 +69,7 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writ
         loss.backward()
         optimizer.step()
         loss_container.update(loss.item(), f0.size(0))
+        writer.add_scalar("Training_loss_immediate", loss.item(), epoch)
     return loss_container.avg
 
 
@@ -97,58 +98,6 @@ def valid(args, network, device, valid_sampler):
             loss = loss_fn(x, y_hat)
             loss_container.update(loss.item(), f0.size(0))
         return loss_container.avg
-
-
-def get_statistics(args, dataset):
-
-    # dataset is an instance of a torch.utils.data.Dataset class
-
-    scaler = sklearn.preprocessing.StandardScaler()  # tool to compute mean and variance of data
-
-    # define operation that computes magnitude spectrograms
-    spec = torch.nn.Sequential(
-        model.STFT(n_fft=args.nfft, n_hop=args.nhop),
-        model.Spectrogram(mono=True)
-    )
-    # return a deep copy of dataset:
-    # constructs a new compound object and recursively inserts copies of the objects found in the original
-    dataset_scaler = copy.deepcopy(dataset)
-
-    dataset_scaler.samples_per_track = 1
-    dataset_scaler.augmentations = None  # no scaling of sources before mixing
-    dataset_scaler.random_chunks = False  # no random chunking of tracks
-    dataset_scaler.random_track_mix = False  # no random accompaniments for vocals
-    dataset_scaler.random_interferer_mix = False
-    dataset_scaler.seq_duration = None  # if None, the original whole track from musdb is loaded
-
-    # make a progress bar:
-    # returns an iterator which acts exactly like the original iterable,
-    # but prints a dynamically updating progressbar every time a value is requested.
-    pbar = tqdm.tqdm(range(len(dataset_scaler)), disable=args.quiet)
-
-    for ind in pbar:
-        out = dataset_scaler[ind]  # x is mix and y is target source in time domain, z is text and ignored here
-        x = out[0]
-        y = out[1]
-        pbar.set_description("Compute dataset statistics")
-        X = spec(x[None, ...])  # X is mono magnitude spectrogram, ... means as many ':' as needed
-
-        # X is spectrogram of one full track
-        # at this point, X has shape (nb_frames, nb_samples, nb_channels, nb_bins) = (N, 1, 1, F)
-        # nb_frames: time steps, nb_bins: frequency bands, nb_samples: batch size
-
-        # online computation of mean and std on X for later scaling
-        # after squeezing, X has shape (N, F)
-        scaler.partial_fit(np.squeeze(X))  # np.squeeze: remove single-dimensional entries from the shape of an array
-
-    # set inital input scaler values
-    # scale_ and mean_ have shape (nb_bins,), standard deviation and mean are computed on each frequency band separately
-    # if std of a frequency bin is smaller than m = 1e-4 * (max std of all freq. bins), set it to m
-    std = np.maximum(   # maximum compares two arrays element wise and returns the maximum element wise
-        scaler.scale_,
-        1e-4*np.max(scaler.scale_)  # np.max = np.amax, it returns the max element of one array
-    )
-    return scaler.mean_, std
 
 
 def save_model(tag, checkpoint, params, best_loss, valid_loss, target_path):
@@ -309,6 +258,8 @@ def main():
     parser.add_argument('--voiced-unvoiced-same-noise', action='store_true', default=False)
     parser.add_argument('--physical-modeling-sample-rate', type=int, default=16000,
                         help='Sample rate of the physical model which influences the range of fc.')
+    parser.add_argument('--excitation-amplitude-scale', type=float, default=10,
+                        help='Maximum value of the excitation amplitude factor.')
 
 
     parser.add_argument('--nb-workers', type=int, default=4,
@@ -466,7 +417,8 @@ def main():
         if args.shuffle_songs == True:
             shuffle_songs(train_sampler, valid_sampler, args)
 
-        train_loss = train(args, model_to_train, device, train_sampler, optimizer, ss_weights_dict, writer) # DBG added writer
+        train_loss = train(args, model_to_train, device, train_sampler,
+                           optimizer, ss_weights_dict, writer, epoch)
 
         # calculate validation loss only if model is not optimized on one single example
         if args.one_example or args.one_batch or (args.dataset == 'synthetic'):
