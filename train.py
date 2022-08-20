@@ -23,13 +23,14 @@ from ddsp import losses
 
 tqdm.monitor_interval = 0
 
-def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer, epoch):
+def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer):
     loss_container = utils.AverageMeter()
     network.train()
     if args.loss_lsf_weight > 0: network.return_lsf = True
     if args.ss_loss_weight > 0: network.return_synth_controls = True
     if args.supervised: network.return_sources = True
     pbar = tqdm.tqdm(train_sampler, disable=args.quiet)
+    writer_counter = 0
     for d in pbar:
         x = d[0]  # mix
         f0 = d[1]  # f0
@@ -69,7 +70,8 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writ
         loss.backward()
         optimizer.step()
         loss_container.update(loss.item(), f0.size(0))
-        writer.add_scalar("Training_loss_immediate", loss.item(), epoch)
+        writer.add_scalar("Training_loss_immediate", loss.item(), writer_counter)
+        writer_counter += 1
     return loss_container.avg
 
 
@@ -260,7 +262,8 @@ def main():
                         help='Sample rate of the physical model which influences the range of fc.')
     parser.add_argument('--excitation-amplitude-scale', type=float, default=10,
                         help='Maximum value of the excitation amplitude factor.')
-
+    parser.add_argument('--maximum-excitation-length', type=float, default=0.05,
+                        help='Maximum length of the excitation signal in seconds.')
 
     parser.add_argument('--nb-workers', type=int, default=4,
                         help='Number of workers for dataloader.')
@@ -418,7 +421,7 @@ def main():
             shuffle_songs(train_sampler, valid_sampler, args)
 
         train_loss = train(args, model_to_train, device, train_sampler,
-                           optimizer, ss_weights_dict, writer, epoch)
+                           optimizer, ss_weights_dict, writer)
 
         # calculate validation loss only if model is not optimized on one single example
         if args.one_example or args.one_batch or (args.dataset == 'synthetic'):

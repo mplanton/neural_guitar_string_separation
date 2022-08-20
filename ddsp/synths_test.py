@@ -39,6 +39,8 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
                torch.Tensor of shape [n_examples, n_onset_indices, 1]
         a: Excitation amplitude factor scaled to [0, 1],
                torch.Tensor of shape [n_onset_indices, 1]
+        excitation_len: Excitation length scaled to [0, 1],
+               torch.Tensor of shape [n_onset_indices, 1]
     """
     # onset_frame_indices: Note onset frame indices to trigger excitation
     #     signals. One index is [batch, string, onset_frame],
@@ -88,7 +90,14 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
     a = torch.linspace(a_min, a_max, n_onset_indices)
     a = a.unsqueeze(0).repeat(n_examples, 1).unsqueeze(-1)
     
-    return f0_hz, fc, onset_frame_indices, fc_ex, a
+    #excitation_len: Excitation length scaled to [0, 1],
+    #       torch.Tensor of shape [n_onset_indices, 1]
+    t_ex_min = 0.1
+    t_ex_max = 1
+    excitation_len = torch.linspace(t_ex_min, t_ex_max, n_onset_indices)
+    excitation_len = excitation_len.unsqueeze(0).repeat(n_examples, 1).unsqueeze(-1)
+    
+    return f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len
 
 
 def check_attributes_for_gradients(object):
@@ -102,15 +111,17 @@ def check_attributes_for_gradients(object):
 class TestCore(unittest.TestCase):
 
     def test_KS_synthetic_input(self):
-        save_output=True
+        save_output=False
         
-        excitation_length = 0.005
+        max_excitation_length = 0.05
         excitation_amplitude_scale = 10
         n_examples = 2
         batch_size = 2
         sr = 16000
+        
         #example_length = 2
         example_length = 0.16 # sec
+        
         # Number of sources in the mix
         J = 6
         # The FFT hop size is the audio frame length
@@ -121,7 +132,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, onset_frame_indices, fc_ex, a = \
+        f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len = \
             generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
@@ -130,7 +141,7 @@ class TestCore(unittest.TestCase):
                                   audio_frame_size=fft_hop_size,
                                   n_strings=J,
                                   min_freq=20,
-                                  excitation_length=excitation_length,
+                                  max_excitation_length=max_excitation_length,
                                   excitation_amplitude_scale=excitation_amplitude_scale)
         
         # Synthesize sources from parameters
@@ -143,12 +154,14 @@ class TestCore(unittest.TestCase):
             onset_frame_indices_in = onset_frame_indices[example]
             fc_ex_in = fc_ex[example]
             a_in = a[example]
+            excitation_len_in = excitation_len[example]
             
             controls = ks.get_controls(f0_in,
                                        fc_in,
                                        onset_frame_indices_in,
                                        fc_ex_in,
-                                       a_in)
+                                       a_in,
+                                       excitation_len_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         mix = sources.sum(dim=1)
         
@@ -166,7 +179,7 @@ class TestCore(unittest.TestCase):
     
     
     def test_KS_differentiability(self):
-        excitation_length=0.005
+        max_excitation_length = 0.05
         excitation_amplitude_scale = 10
         n_examples = 2
         batch_size = 2
@@ -182,7 +195,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, onset_frame_indices, fc_ex, a = \
+        f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len = \
             generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
@@ -191,7 +204,7 @@ class TestCore(unittest.TestCase):
                                   audio_frame_size=fft_hop_size,
                                   n_strings=J,
                                   min_freq=20,
-                                  excitation_length=excitation_length,
+                                  max_excitation_length=max_excitation_length,
                                   excitation_amplitude_scale=excitation_amplitude_scale)
         
         for example in range(n_examples):
@@ -201,6 +214,7 @@ class TestCore(unittest.TestCase):
             onset_frame_indices_in = onset_frame_indices[example]
             fc_ex_in = fc_ex[example]
             a_in = a[example]
+            excitation_len_in = excitation_len[example]
             
             #check_attributes_for_gradients(ks)
 
@@ -211,13 +225,18 @@ class TestCore(unittest.TestCase):
                 fc_ex_in.grad.zero_()
             if a_in.grad is not None:
                 a_in.grad.zero_()
+            if excitation_len_in.grad is not None:
+                excitation_len_in.grad.zero_()
             
             # Predicted controls from the neural network.
             fc_in.requires_grad = True
             fc_ex_in.requires_grad = True
             a_in.requires_grad = True
+            excitation_len_in.requires_grad = True
             
-            sources = ks(f0_in, fc_in, onset_frame_indices_in, fc_ex_in, a_in)
+            sources = ks(f0_in, fc_in, onset_frame_indices_in, fc_ex_in, a_in,
+                         excitation_len_in)
+            
             # Dummy cost function
             error = sources.sum()
             
@@ -229,10 +248,9 @@ class TestCore(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    test = TestCore()
-    
     unittest.main()
     
+    #test = TestCore()
     #test.test_KS_synthetic_input()
     #test.test_KS_differentiability()
     

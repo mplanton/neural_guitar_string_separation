@@ -20,4 +20,4 @@ with open(sys.argv[1], "r") as f:
     plt.xlabel("epochs")
     plt.ylabel("loss")
     #plt.title("Karplus-Strong model trained with Guitarset")
-    fig.savefig(sys.argv[1].split('/')[-1].split('.')[0] + "_learning_curves.png", dpi=300)
+    fig.savefig(sys.argv[1].split('/')[-1].split('.')[0] + "_learning_curves.pdf", dpi=300)
