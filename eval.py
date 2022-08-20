@@ -107,7 +107,7 @@ if baselines:
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-trained_model, model_args = utils.load_model(tag, device, return_args=True)
+trained_model, model_args = utils.load_model(tag, 'best', device, return_args=True)
 trained_model.return_synth_params = False
 trained_model.return_sources = True
 
