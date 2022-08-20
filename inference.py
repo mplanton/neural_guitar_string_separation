@@ -105,6 +105,7 @@ f0_hz = []
 fc = []
 onset_frame_indices = []
 fc_ex = []
+a = []
 
 
 trained_model.eval()
@@ -119,6 +120,7 @@ for mix_slice, freqs_slice, sources_slice in pbar:
     fc.append(ctl['fc'])
     onset_frame_indices.append(ctl['onset_frame_indices'])
     fc_ex.append(ctl['fc_ex'])
+    a.append(ctl['a'])
     
     # [batch_size * n_sources, n_samples]
     source_estimates_masking_slice = utils.masking_from_synth_signals_torch(mix_slice, source_estimates_slice, n_fft=2048, n_hop=256)
@@ -137,6 +139,7 @@ f0_hz = torch.cat(f0_hz, dim=-1).numpy()
 fc = torch.cat(fc, dim=-1).numpy()
 global_onset_frame_indices = convert_onsets_to_global_inexing(onset_frame_indices, batch_size, n_sources)
 fc_ex = torch.cat(fc_ex).numpy()
+a = torch.cat(a).numpy()
 
 out_path = "inference/" + tag + '_' + args.which
 os.makedirs(out_path, exist_ok=True)
@@ -158,6 +161,7 @@ np.save(out_path + "/f0_hz.npy", f0_hz) # [batch_size, n_sources, n_frames]
 np.save(out_path + "/fc.npy", fc)       # [batch_size, n_sources, n_frames]
 np.save(out_path + "/onset_frame_indices.npy", global_onset_frame_indices) # [n_onsets, 3]
 np.save(out_path + "/fc_ex.npy", fc_ex) # [n_onsets, 1]
+np.save(out_path + "/a.npy", a) # [n_onsets, 1]
 
 f_name = "inference_songs.json"
 with open(os.path.join(out_path, f_name), "w") as file:
