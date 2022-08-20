@@ -810,7 +810,7 @@ class KarplusStrong(processors.Processor):
         audio_frame_size: int, number of time samples in one (STFT) audio frame
         n_strings: int, number of strings
         min_freq: minimum frequency that can be synthesized
-        maximum_excitation_length: Maximum length of the excitation signal in seconds
+        excitation_length: Length of the excitation signal in seconds
         excitation_amplitude_scale: Maximum value of the excitation amplitude factor
     """
     def __init__(self,
@@ -820,7 +820,7 @@ class KarplusStrong(processors.Processor):
                  audio_frame_size=256,
                  n_strings=6,
                  min_freq=20,
-                 maximum_excitation_length=0.05,
+                 excitation_length=0.005,
                  excitation_amplitude_scale=10):
         assert n_samples % audio_frame_size == 0.0, \
             f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
@@ -833,7 +833,6 @@ class KarplusStrong(processors.Processor):
         self.n_strings = n_strings
         self.min_freq = min_freq
         self.excitation_amplitude_scale = excitation_amplitude_scale
-        self.maximum_excitation_length = maximum_excitation_length
         
         # Delay line
         self.max_delay = 1 / min_freq
@@ -854,8 +853,8 @@ class KarplusStrong(processors.Processor):
         self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
         
         # Excitation
-        self.n_excitation_samples = math.ceil(maximum_excitation_length * sample_rate)
-        # White noise as excitation
+        self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
+        # Use just white noise as excitation signal by now...
         self.excitation = torch.rand(self.n_excitation_samples) * 2 - 1
         self.filtered_excitation = torch.zeros_like(self.excitation)
         
@@ -900,7 +899,7 @@ class KarplusStrong(processors.Processor):
                 element.clear_state()
     
 
-    def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len):
+    def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex, a):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
@@ -914,8 +913,6 @@ class KarplusStrong(processors.Processor):
             fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
                    torch.Tensor of shape [n_onset_indices, 1]
             a: Excitation amplitude factor scaled to [0, 1],
-                   torch.Tensor of shape [n_onset_indices, 1]
-            excitation_len: Excitation length scaled to [0, 1],
                    torch.Tensor of shape [n_onset_indices, 1]
         """
         assert f0_hz.shape == fc.shape, \
@@ -932,26 +929,24 @@ class KarplusStrong(processors.Processor):
                     else:
                         self.last_valid_f0[batch, string] = f0_hz[batch, string, frame]
         
+        # Scale parameters
+        fc = fc * self.sample_rate / 2
+        fc_ex = fc_ex * self.sample_rate / 2
+        a = a * self.excitation_amplitude_scale
+        
         # Fundamental periods
         t0s = core.safe_divide(1, f0_hz)
         # Limit fundamental period to maximum delay
         t0s [t0s > self.max_delay] = self.max_delay
         
-        # Scale parameters
-        fc = fc * self.sample_rate / 2
-        fc_ex = fc_ex * self.sample_rate / 2
-        a = a * self.excitation_amplitude_scale
-        excitation_len = excitation_len * self.maximum_excitation_length
-        
         return {"t0s": t0s,
                 'fcs': fc,
                 'onset_frame_indices': onset_frame_indices,
                 'fcs_ex': fc_ex,
-                'a': a,
-                'excitation_len': excitation_len}
+                'a': a}
     
 
-    def get_signal(self, t0s, fcs, onset_frame_indices, fcs_ex, a, excitation_len, **kwargs):
+    def get_signal(self, t0s, fcs, onset_frame_indices, fcs_ex, a, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
@@ -967,8 +962,6 @@ class KarplusStrong(processors.Processor):
                  torch.Tensor of shape [n_onset_indices, 1]
             a: Excitation amplitude factor,
                  torch.Tensor of shape [n_onset_indices, 1]
-            excitation_len: Excitation length in seconds,
-                   torch.Tensor of shape [n_onset_indices, 1]
         
         Returns:
             The synthesized example of string sounds from the given parameters,
@@ -978,21 +971,20 @@ class KarplusStrong(processors.Processor):
         self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
                                         self.n_samples + self.n_excitation_samples))
         for n, onset_index in enumerate(onset_frame_indices):
-            batch, string, onset_frame = onset_index
+            batch = onset_index[0].item()
+            string = onset_index[1].item()
             # Convert from frame rate to audio rate.
-            start = onset_frame * self.audio_frame_size
-            current_excitation_samples = (excitation_len[n] * self.sample_rate).type(torch.int)[0]
-            stop = start + current_excitation_samples
+            start = onset_index[2].item() * self.audio_frame_size
+            stop = start + self.n_excitation_samples
             # Filter the excitation signal
             fc_ex = fcs_ex[n].unsqueeze(-1)
             self.lp_ex.set_fc(fc_ex)
             self.filtered_excitation = torch.zeros_like(self.excitation)
-            
-            for i in range(current_excitation_samples):
+            for i in range(self.n_excitation_samples):
                 x_in = self.excitation[..., i].unsqueeze(-1).unsqueeze(-1)
                 self.filtered_excitation[i] = a[n] * self.lp_ex(x_in)
             self.lp_ex.clear_state()
-            self.excitation_block[batch, string, start : stop] = self.filtered_excitation[:current_excitation_samples]
+            self.excitation_block[batch, string, start : stop] = self.filtered_excitation
         
         # Store excitation overhead for next example and resize the
         # excitation block to the correct length.
