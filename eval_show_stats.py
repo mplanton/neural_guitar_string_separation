@@ -32,7 +32,7 @@ metrics = ['sp_SNR', 'sp_SI-SNR', 'SI-SDR', 'mel_cep_dist']
 eval_synth = pd.read_pickle("evaluation/" + args.tag + "/eval_results_" + \
                              f0_add_on + "_" + ds + "/all_results.pandas")
 eval_synth['name'] = "synth"
-print("Direct synthesis stats:")
+print("Direct synthesized sources stats:")
 print(eval_synth[metrics].describe())
 
 # Masked
@@ -40,7 +40,7 @@ eval_masked = pd.read_pickle("evaluation/" + args.tag + "_masking/eval_results_"
                              f0_add_on + "_" + ds + "/all_results.pandas")
 eval_masked['name'] = "masked"
 print("\n", 80*'-', "\n")
-print("Masked mix stats:")
+print("Masked sources stats:")
 print(eval_masked[metrics].describe())
 
 

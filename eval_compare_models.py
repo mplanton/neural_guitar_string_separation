@@ -79,13 +79,13 @@ for model_path in model_paths:
     # Direct synthesis
     eval_synth = pd.read_pickle("evaluation/" + tag + "/eval_results_" + \
                                  f0_add_on + "_" + ds + "/all_results.pandas")
-    eval_synth['name'] = tag + "_synth"
+    eval_synth['name'] = tag[-3:] + "_synth"
     evals.append(eval_synth)
     
     # Masked
     eval_masked = pd.read_pickle("evaluation/" + tag + "_masking/eval_results_" + \
                                  f0_add_on + "_" + ds + "/all_results.pandas")
-    eval_masked['name'] = tag + "_masked"
+    eval_masked['name'] = tag[-3:] + "_masked"
     evals.append(eval_masked)
 
 
@@ -113,7 +113,7 @@ for metric in metrics:
     fig.savefig(f_path, dpi=300)
     
     # Median Ranking
-    fig = plt.figure(figsize=[12, 9])
+    fig = plt.figure(figsize=[6, 4.5])
     ax = df_metric.median().sort_values().plot.bar()
     ax.set_ylabel("median " + ylabels[metric])
     plt.tight_layout()
@@ -121,7 +121,7 @@ for metric in metrics:
     fig.savefig(f_path, dpi=300)
     
     # Mean Ranking
-    fig = plt.figure(figsize=[12, 9])
+    fig = plt.figure(figsize=[6, 4.5])
     ax = df_metric.mean().sort_values().plot.bar()
     ax.set_ylabel("mean " + ylabels[metric])
     plt.tight_layout()
