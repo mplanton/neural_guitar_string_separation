@@ -111,7 +111,7 @@ def check_attributes_for_gradients(object):
 class TestCore(unittest.TestCase):
 
     def test_KS_synthetic_input(self):
-        save_output=False
+        save_output=True
         
         max_excitation_length = 0.05
         excitation_amplitude_scale = 10
@@ -141,7 +141,7 @@ class TestCore(unittest.TestCase):
                                   audio_frame_size=fft_hop_size,
                                   n_strings=J,
                                   min_freq=20,
-                                  max_excitation_length=max_excitation_length,
+                                  maximum_excitation_length=max_excitation_length,
                                   excitation_amplitude_scale=excitation_amplitude_scale)
         
         # Synthesize sources from parameters
@@ -204,7 +204,7 @@ class TestCore(unittest.TestCase):
                                   audio_frame_size=fft_hop_size,
                                   n_strings=J,
                                   min_freq=20,
-                                  max_excitation_length=max_excitation_length,
+                                  maximum_excitation_length=max_excitation_length,
                                   excitation_amplitude_scale=excitation_amplitude_scale)
         
         for example in range(n_examples):

@@ -227,7 +227,8 @@ class KarplusStrongAutoencoder(_Model):
                  bidirectional=True,
                  return_sources=False,
                  return_synth_controls=False,
-                 excitation_amplitude_scale=10):
+                 excitation_amplitude_scale=10,
+                 maximum_excitation_length=0.05):
         super().__init__()
 
         # attributes
@@ -259,6 +260,7 @@ class KarplusStrongAutoencoder(_Model):
         # Excitation controls prediction
         self.fc_ex_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
         self.a_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
+        self.ex_len_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
         
         # Feedback filter control prediction
         self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
@@ -273,7 +275,7 @@ class KarplusStrongAutoencoder(_Model):
                                             audio_frame_size=pm_hop_size,
                                             n_strings=len(allowed_strings),
                                             min_freq=20,
-                                            excitation_length=0.005,
+                                            maximum_excitation_length=maximum_excitation_length,
                                             excitation_amplitude_scale=excitation_amplitude_scale)
         
         # Resampler to resample physical modeling output to system sample rate.
@@ -297,6 +299,7 @@ class KarplusStrongAutoencoder(_Model):
         return_sources = config['return_sources'] if 'return_sources' in keys else False
         return_synth_controls = config['return_synth_controls'] if 'return_synth_controls' in keys else False
         excitation_amplitude_scale = config['excitation_amplitude_scale'] if 'excitation_amplitude_scale' in keys else 10
+        maximum_excitation_length = config['maximum_excitation_length'] if 'maximum_excitation_length' in keys else 0.05
         
         return cls(batch_size=batch_size,
                    allowed_strings=allowed_strings,
@@ -312,7 +315,8 @@ class KarplusStrongAutoencoder(_Model):
                    bidirectional=bidirectional,
                    return_sources=return_sources,
                    return_synth_controls=return_synth_controls,
-                   excitation_amplitude_scale=excitation_amplitude_scale)
+                   excitation_amplitude_scale=excitation_amplitude_scale,
+                   maximum_excitation_length=maximum_excitation_length)
 
     def onset_detection(self, f0_hz):
         """
@@ -373,6 +377,7 @@ class KarplusStrongAutoencoder(_Model):
         # Predict the excitation controls.
         fc_ex = self.fc_ex_decoder(x, onset_frame_indices)
         a = self.a_decoder(x, onset_frame_indices)
+        excitation_len = self.ex_len_decoder(x, onset_frame_indices)
         
 
         # Apply the synthesis model.
@@ -380,7 +385,8 @@ class KarplusStrongAutoencoder(_Model):
                                    fc=fc,
                                    onset_frame_indices=onset_frame_indices,
                                    fc_ex=fc_ex,
-                                   a=a)
+                                   a=a,
+                                   excitation_len=excitation_len)
         if self.sample_rate != self.physical_modeling_sample_rate:
             # Resample
             sources = self.resampler(pm_sources)
@@ -392,7 +398,8 @@ class KarplusStrongAutoencoder(_Model):
             'fc': fc.detach(),
             'onset_frame_indices': onset_frame_indices.detach(),
             'fc_ex': fc_ex.detach(),
-            'a': a.detach()
+            'a': a.detach(),
+            'excitation_len': excitation_len.detach()
         }
 
         if self.return_sources and (self.return_synth_controls or return_synth_controls):
