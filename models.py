@@ -258,12 +258,13 @@ class KarplusStrongAutoencoder(_Model):
                                             bidirectional=bidirectional)
         
         # Excitation controls prediction
-        self.fc_ex_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
-        self.a_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
-        self.ex_len_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
+        self.fc_ex_decoder = nc.OnsetParameterDecoder(input_size=decoder_output_size)
+        self.a_decoder = nc.OnsetParameterDecoder(input_size=decoder_output_size)
+        self.ex_len_decoder = nc.OnsetParameterDecoder(input_size=decoder_output_size)
         
         # Feedback filter control prediction
-        self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
+        self.fc_decoder = nc.FramewiseParameterDecoder(input_size=decoder_output_size)
+        self.gf_decoder = nc.FramewiseParameterDecoder(input_size=decoder_output_size)
         
         # synth
         upsampling_factor = physical_modeling_sample_rate / sample_rate
@@ -367,10 +368,8 @@ class KarplusStrongAutoencoder(_Model):
         f0_hz_dec = f0_hz_dec.unsqueeze(-1)
         x = self.decoder(f0_hz=f0_hz_dec, z=z)
         
-        x_fc = self.fc_linear(x)
-        fc = core.exp_sigmoid(x_fc)
-        fc = fc.squeeze(-1)
-        fc = torch.reshape(fc, (batch_size, n_sources, n_frames))
+        fc = self.fc_decoder(x, batch_size, n_sources, n_frames)
+        gf = self.gf_decoder(x, batch_size, n_sources, n_frames)
 
         onset_frame_indices = self.onset_detection(f0_hz)
 
@@ -386,7 +385,8 @@ class KarplusStrongAutoencoder(_Model):
                                    onset_frame_indices=onset_frame_indices,
                                    fc_ex=fc_ex,
                                    a=a,
-                                   excitation_len=excitation_len)
+                                   excitation_len=excitation_len,
+                                   gf=gf)
         if self.sample_rate != self.physical_modeling_sample_rate:
             # Resample
             sources = self.resampler(pm_sources)
@@ -399,7 +399,8 @@ class KarplusStrongAutoencoder(_Model):
             'onset_frame_indices': onset_frame_indices.detach(),
             'fc_ex': fc_ex.detach(),
             'a': a.detach(),
-            'excitation_len': excitation_len.detach()
+            'excitation_len': excitation_len.detach(),
+            'gf': gf.detach()
         }
 
         if self.return_sources and (self.return_synth_controls or return_synth_controls):

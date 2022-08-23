@@ -850,8 +850,8 @@ class KarplusStrong(processors.Processor):
         self.hp = core.SimpleHighpass(batch_size=batch_size,
                                       n_filters=n_strings,
                                       sr=sample_rate)
-        hp_fc = 5
-        self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
+        fc_hp = 20
+        self.hp.set_fc(fc_hp * torch.ones((batch_size, n_strings)))
         
         # Excitation
         self.n_excitation_samples = math.ceil(maximum_excitation_length * sample_rate)
@@ -900,7 +900,7 @@ class KarplusStrong(processors.Processor):
                 element.clear_state()
     
 
-    def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len):
+    def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len, gf):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
@@ -917,6 +917,8 @@ class KarplusStrong(processors.Processor):
                    torch.Tensor of shape [n_onset_indices, 1]
             excitation_len: Excitation length scaled to [0, 1],
                    torch.Tensor of shape [n_onset_indices, 1]
+            gf:    Feedback gain factor between [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
         """
         assert f0_hz.shape == fc.shape, \
             "Shapes of f0_hz and fc must be equal, but shapes " \
@@ -948,10 +950,11 @@ class KarplusStrong(processors.Processor):
                 'onset_frame_indices': onset_frame_indices,
                 'fcs_ex': fc_ex,
                 'a': a,
-                'excitation_len': excitation_len}
+                'excitation_len': excitation_len,
+                'gf': gf}
     
 
-    def get_signal(self, t0s, fcs, onset_frame_indices, fcs_ex, a, excitation_len, **kwargs):
+    def get_signal(self, t0s, fcs, onset_frame_indices, fcs_ex, a, excitation_len, gf, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
@@ -969,6 +972,8 @@ class KarplusStrong(processors.Processor):
                  torch.Tensor of shape [n_onset_indices, 1]
             excitation_len: Excitation length in seconds,
                    torch.Tensor of shape [n_onset_indices, 1]
+            gf:    Feedback gain factor between [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
             The synthesized example of string sounds from the given parameters,
@@ -1017,7 +1022,7 @@ class KarplusStrong(processors.Processor):
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
                 excitation = self.excitation_block[..., offset + i]
-                f = self.hp(self.lp(self.dl(last_y)))
-                out[..., offset + i] = excitation + f
+                f = gf[..., frame_idx] * self.hp(self.dl(last_y))
+                out[..., offset + i] = self.lp(excitation + f)
                 last_y = out[..., offset + i]
         return out

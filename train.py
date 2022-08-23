@@ -23,6 +23,8 @@ from ddsp import losses
 
 tqdm.monitor_interval = 0
 
+writer_counter = 0
+
 def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer):
     loss_container = utils.AverageMeter()
     network.train()
@@ -30,7 +32,6 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writ
     if args.ss_loss_weight > 0: network.return_synth_controls = True
     if args.supervised: network.return_sources = True
     pbar = tqdm.tqdm(train_sampler, disable=args.quiet)
-    writer_counter = 0
     for d in pbar:
         x = d[0]  # mix
         f0 = d[1]  # f0
@@ -70,6 +71,7 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writ
         loss.backward()
         optimizer.step()
         loss_container.update(loss.item(), f0.size(0))
+        global writer_counter
         writer.add_scalar("Training_loss_immediate", loss.item(), writer_counter)
         writer_counter += 1
     return loss_container.avg

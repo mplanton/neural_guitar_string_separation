@@ -41,6 +41,8 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
                torch.Tensor of shape [n_onset_indices, 1]
         excitation_len: Excitation length scaled to [0, 1],
                torch.Tensor of shape [n_onset_indices, 1]
+        gf:    Feedback gain factor between [0, 1],
+               torch.Tensor of shape [batch_size, n_strings, n_frames]
     """
     # onset_frame_indices: Note onset frame indices to trigger excitation
     #     signals. One index is [batch, string, onset_frame],
@@ -97,7 +99,14 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
     excitation_len = torch.linspace(t_ex_min, t_ex_max, n_onset_indices)
     excitation_len = excitation_len.unsqueeze(0).repeat(n_examples, 1).unsqueeze(-1)
     
-    return f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len
+    #gf:    Feedback gain factor between [0, 1],
+    #       torch.Tensor of shape [batch_size, n_strings, n_frames]
+    gf_min = 0.05
+    gf_max = 1
+    gf = torch.linspace(gf_min, gf_max, n_sources)
+    gf = expand_constant(gf, n_examples, batch_size, n_frames)
+    
+    return f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len, gf
 
 
 def check_attributes_for_gradients(object):
@@ -132,7 +141,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len = \
+        f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len, gf = \
             generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
@@ -155,13 +164,15 @@ class TestCore(unittest.TestCase):
             fc_ex_in = fc_ex[example]
             a_in = a[example]
             excitation_len_in = excitation_len[example]
+            gf_in = gf[example]
             
             controls = ks.get_controls(f0_in,
                                        fc_in,
                                        onset_frame_indices_in,
                                        fc_ex_in,
                                        a_in,
-                                       excitation_len_in)
+                                       excitation_len_in,
+                                       gf_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         mix = sources.sum(dim=1)
         
@@ -195,7 +206,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len = \
+        f0_hz, fc, onset_frame_indices, fc_ex, a, excitation_len, gf = \
             generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
@@ -215,6 +226,7 @@ class TestCore(unittest.TestCase):
             fc_ex_in = fc_ex[example]
             a_in = a[example]
             excitation_len_in = excitation_len[example]
+            gf_in = gf[example]
             
             #check_attributes_for_gradients(ks)
 
@@ -227,15 +239,18 @@ class TestCore(unittest.TestCase):
                 a_in.grad.zero_()
             if excitation_len_in.grad is not None:
                 excitation_len_in.grad.zero_()
+            if gf_in.grad is not None:
+                gf_in.grad.tero_()
             
             # Predicted controls from the neural network.
             fc_in.requires_grad = True
             fc_ex_in.requires_grad = True
             a_in.requires_grad = True
             excitation_len_in.requires_grad = True
+            gf_in.requires_grad = True
             
             sources = ks(f0_in, fc_in, onset_frame_indices_in, fc_ex_in, a_in,
-                         excitation_len_in)
+                         excitation_len_in, gf_in)
             
             # Dummy cost function
             error = sources.sum()

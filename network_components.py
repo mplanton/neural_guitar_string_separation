@@ -460,9 +460,11 @@ class SynthParameterDecoderSimple(torch.nn.Module):
         return z
 
 
-class ExcitationParameterDecoder(torch.nn.Module):
+class OnsetParameterDecoder(torch.nn.Module):
     """
-    
+    This decoder predicts parameters only on onsets from the latent source
+    representation with a simple linear layer followed by an exponential
+    sigmoid nonlinearity.
     """
     def __init__(self, input_size):
         super().__init__()
@@ -490,6 +492,29 @@ class ExcitationParameterDecoder(torch.nn.Module):
         y = core.exp_sigmoid(x)
         return y
 
+class FramewiseParameterDecoder(torch.nn.Module):
+    """
+    This decoder predicts parameters for every frame from the latent source
+    representation with a simple linear layer followed by an exponential
+    sigmoid nonlinearity.
+    Reshape to right format.
+    """
+    def __init__(self, input_size):
+        super().__init__()
+        self.lin = torch.nn.Linear(input_size, 1)
+    
+    def forward(self, x_lat, batch_size, n_sources, n_frames):
+        """
+        Args:
+            x_lat: Latent source representation,
+                torch.Tensor of shape [batch_size, n_sources, n_frames, input_size]
+        """
+        x = self.lin(x_lat)
+        y = core.exp_sigmoid(x)
+        y = y.squeeze(-1)
+        y = torch.reshape(y, (batch_size, n_sources, n_frames))
+        return y
+
 
 if __name__ == "__main__":
     # Test ExcitationParameterDecoder
@@ -510,7 +535,7 @@ if __name__ == "__main__":
         onset_frame_indices.append([batch, source, frame])
     onset_frame_indices = torch.tensor(onset_frame_indices)
     
-    decoder = ExcitationParameterDecoder(input_size=hidden_size)
+    decoder = OnsetParameterDecoder(input_size=hidden_size)
     
     fc_ex = decoder(x_lat=latent_source_repr,
                     onset_frame_indices=onset_frame_indices)
