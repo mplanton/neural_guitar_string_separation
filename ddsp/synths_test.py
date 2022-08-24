@@ -49,7 +49,7 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
     #     torch.tensor of shape [n_examples, n_onset_indices, 3]
     
     # Make onsets for one example at every quarter second.
-    f_onsets = 4 # Hz
+    f_onsets = 8 # Hz
     onset_times = torch.arange(0, example_length, 1 / f_onsets)
     onset_frames = (onset_times * frame_rate).type(torch.int) # [n_onset_indices]
     
@@ -101,7 +101,7 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
     
     #gf:    Feedback gain factor between [0, 1],
     #       torch.Tensor of shape [batch_size, n_strings, n_frames]
-    gf_min = 0.05
+    gf_min = 0.85
     gf_max = 1
     gf = torch.linspace(gf_min, gf_max, n_sources)
     gf = expand_constant(gf, n_examples, batch_size, n_frames)
@@ -126,10 +126,10 @@ class TestCore(unittest.TestCase):
         excitation_amplitude_scale = 10
         n_examples = 2
         batch_size = 2
-        sr = 16000
+        sr = 32000
         
-        #example_length = 2
-        example_length = 0.16 # sec
+        example_length = 2
+        #example_length = 0.16 # sec
         
         # Number of sources in the mix
         J = 6
@@ -155,25 +155,26 @@ class TestCore(unittest.TestCase):
         
         # Synthesize sources from parameters
         sources = torch.zeros((batch_size, J, n_examples * M))
-        for example in range(n_examples):
-            #print("Calculate example", example)
-            
-            f0_in = f0_hz[example]
-            fc_in = fc[example]
-            onset_frame_indices_in = onset_frame_indices[example]
-            fc_ex_in = fc_ex[example]
-            a_in = a[example]
-            excitation_len_in = excitation_len[example]
-            gf_in = gf[example]
-            
-            controls = ks.get_controls(f0_in,
-                                       fc_in,
-                                       onset_frame_indices_in,
-                                       fc_ex_in,
-                                       a_in,
-                                       excitation_len_in,
-                                       gf_in)
-            sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
+        with torch.no_grad():
+            for example in range(n_examples):
+                #print("Calculate example", example)
+                
+                f0_in = f0_hz[example]
+                fc_in = fc[example]
+                onset_frame_indices_in = onset_frame_indices[example]
+                fc_ex_in = fc_ex[example]
+                a_in = a[example]
+                excitation_len_in = excitation_len[example]
+                gf_in = gf[example]
+                
+                controls = ks.get_controls(f0_in,
+                                           fc_in,
+                                           onset_frame_indices_in,
+                                           fc_ex_in,
+                                           a_in,
+                                           excitation_len_in,
+                                           gf_in)
+                sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         mix = sources.sum(dim=1)
         
         # Save mix and sources
@@ -194,7 +195,7 @@ class TestCore(unittest.TestCase):
         excitation_amplitude_scale = 10
         n_examples = 2
         batch_size = 2
-        sr = 16000
+        sr = 32000
         example_length = 0.16 # sec
         # Number of sources in the mix
         J = 2
@@ -263,9 +264,9 @@ class TestCore(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    #unittest.main()
     
-    #test = TestCore()
-    #test.test_KS_synthetic_input()
+    test = TestCore()
+    test.test_KS_synthetic_input()
     #test.test_KS_differentiability()
     

@@ -266,7 +266,11 @@ def main():
                         help='Maximum value of the excitation amplitude factor.')
     parser.add_argument('--maximum-excitation-length', type=float, default=0.05,
                         help='Maximum length of the excitation signal in seconds.')
-
+    parser.add_argument('--minimum-feedback-factor', type=float, default=0.85,
+                        help='Minimum value of the feedback factor g_f.')
+    
+    
+    
     parser.add_argument('--nb-workers', type=int, default=4,
                         help='Number of workers for dataloader.')
 

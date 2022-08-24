@@ -228,7 +228,8 @@ class KarplusStrongAutoencoder(_Model):
                  return_sources=False,
                  return_synth_controls=False,
                  excitation_amplitude_scale=10,
-                 maximum_excitation_length=0.05):
+                 maximum_excitation_length=0.05,
+                 minimum_feedback_factor=0.85):
         super().__init__()
 
         # attributes
@@ -277,7 +278,8 @@ class KarplusStrongAutoencoder(_Model):
                                             n_strings=len(allowed_strings),
                                             min_freq=20,
                                             maximum_excitation_length=maximum_excitation_length,
-                                            excitation_amplitude_scale=excitation_amplitude_scale)
+                                            excitation_amplitude_scale=excitation_amplitude_scale,
+                                            minimum_feedback_factor=minimum_feedback_factor)
         
         # Resampler to resample physical modeling output to system sample rate.
         self.resampler = torchaudio.transforms.Resample(orig_freq=physical_modeling_sample_rate,
@@ -301,6 +303,7 @@ class KarplusStrongAutoencoder(_Model):
         return_synth_controls = config['return_synth_controls'] if 'return_synth_controls' in keys else False
         excitation_amplitude_scale = config['excitation_amplitude_scale'] if 'excitation_amplitude_scale' in keys else 10
         maximum_excitation_length = config['maximum_excitation_length'] if 'maximum_excitation_length' in keys else 0.05
+        minimum_feedback_factor = config['minimum_feedback_factor'] if 'minimum_feedback_factor' in keys else 0.85
         
         return cls(batch_size=batch_size,
                    allowed_strings=allowed_strings,
@@ -317,7 +320,8 @@ class KarplusStrongAutoencoder(_Model):
                    return_sources=return_sources,
                    return_synth_controls=return_synth_controls,
                    excitation_amplitude_scale=excitation_amplitude_scale,
-                   maximum_excitation_length=maximum_excitation_length)
+                   maximum_excitation_length=maximum_excitation_length,
+                   minimum_feedback_factor=minimum_feedback_factor)
 
     def onset_detection(self, f0_hz):
         """

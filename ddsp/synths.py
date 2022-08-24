@@ -821,7 +821,8 @@ class KarplusStrong(processors.Processor):
                  n_strings=6,
                  min_freq=20,
                  maximum_excitation_length=0.05,
-                 excitation_amplitude_scale=10):
+                 excitation_amplitude_scale=10,
+                 minimum_feedback_factor=0.85):
         assert n_samples % audio_frame_size == 0.0, \
             f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
         
@@ -834,6 +835,7 @@ class KarplusStrong(processors.Processor):
         self.min_freq = min_freq
         self.excitation_amplitude_scale = excitation_amplitude_scale
         self.maximum_excitation_length = maximum_excitation_length
+        self.gf_min = minimum_feedback_factor
         
         # Delay line
         self.max_delay = 1 / min_freq
@@ -944,6 +946,9 @@ class KarplusStrong(processors.Processor):
         fc_ex = fc_ex * self.sample_rate / 2
         a = a * self.excitation_amplitude_scale
         excitation_len = excitation_len * self.maximum_excitation_length
+        
+        # Scale to a range of [gf_min, 1]
+        gf = self.gf_min + (1 - self.gf_min) * gf
         
         return {"t0s": t0s,
                 'fcs': fc,
