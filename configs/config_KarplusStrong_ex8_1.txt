@@ -1,0 +1,71 @@
+# ----- GENERAL PARAMETERS ---------------------------
+
+tag: KarplusStrong_ex8_1
+comment: Experiment 8.1: Successor of Ex5 recreation. I) Increased fc of the DC blocking highpass from 5Hz to 20Hz. II) Halved the training data for faster training.
+architecture: KarplusStrongAutoencoder
+
+
+# -------- DATASET PARAMETERS -----------------------
+
+dataset = Guitarset
+n-files-per-style-genre = 5 # from 36
+valid-split = 0.2
+style = comp # from comp, solo or all
+genres = [bn] # from [bn, funk, jazz, rock, ss]
+allowed-strings = [1, 2, 3, 4, 5, 6] # from [1, 2, 3, 4, 5, 6]
+
+# The example length must be a multiple of the CREPE hop size of 256.
+example-length = 5120   # 20 * 256
+
+f0-cuesta = False        # Use CREPE pitch tracks
+normalize-mix = True
+normalize-sources = False
+
+# -------- TRAINING PARAMETERS -----------------------
+
+epochs = 2
+batch-size = 2           # 2 is CPU setting, approx. ? for GPU
+shuffle-songs = True     # Shuffle the song sequence for every epoch.
+
+lr = 0.0001
+patience = 5             # Early stopping patience
+lr-decay-patience = 80
+lr-decay-gamma = 0.98
+weight-decay = 0.00001
+seed = 4
+nb-workers = 1           # Keep this below 2 since parallel loading is not supported yet.
+quiet = False
+no-cuda = False
+
+supervised = False
+reconstruction-loss-weight = 1
+loss-nfft = [2048, 1024, 512, 256, 128, 64]
+loss-mag-weight = 1
+loss-logmag-weight = 1
+loss-logmel-weight = 0
+loss-delta-freq-weight = 0
+loss-delta-time-weight = 0
+loss-lsf-weight = 0  # LSF regularization loss
+
+
+# -------- MODEL PARAMETERS ------------------------
+
+# This Influences the range of fc, and influences the PM example-length,
+# which must be a multiple of the PM frame size.
+# It is easy to take a multiple of the system sample rate of 16kHz.
+physical-modeling-sample-rate = 32000
+
+excitation-amplitude-scale = 10 # Maximum excitation amplitude
+
+# Input signal FFT analysis parameters
+nfft = 512
+nhop = 256
+
+encoder = MixEncoderSimple
+
+encoder-hidden-size = 256
+embedding-size = 128
+decoder-hidden-size = 512
+decoder-output-size = 512
+unidirectional = True
+

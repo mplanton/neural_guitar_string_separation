@@ -23,6 +23,8 @@ from ddsp import losses
 
 tqdm.monitor_interval = 0
 
+writer_counter = 0
+
 def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer, epoch):
     loss_container = utils.AverageMeter()
     network.train()
@@ -69,7 +71,9 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writ
         loss.backward()
         optimizer.step()
         loss_container.update(loss.item(), f0.size(0))
-        writer.add_scalar("Training_loss_immediate", loss.item(), epoch)
+        global writer_counter
+        writer.add_scalar("Training_loss_immediate", loss.item(), writer_counter)
+        writer_counter += 1
     return loss_container.avg
 
 
