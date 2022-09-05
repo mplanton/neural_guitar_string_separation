@@ -110,6 +110,6 @@ echo "Saved evaluation statistics plots to $plots_path."
 
 echo
 echo "Inference..."
-python3 inference.py --tag $tag --test-set $test_set --song-names $test_files
+python3 inference.py --tag $tag --which best --test-set $test_set --song-names $test_files
 echo "Inference done."
 

@@ -849,7 +849,7 @@ class KarplusStrong(processors.Processor):
         self.hp = core.SimpleHighpass(batch_size=batch_size,
                                       n_filters=n_strings,
                                       sr=sample_rate)
-        hp_fc = 20
+        hp_fc = 5
         self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
         
         # Excitation
