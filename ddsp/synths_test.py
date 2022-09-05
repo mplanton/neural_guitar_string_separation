@@ -102,7 +102,7 @@ def check_attributes_for_gradients(object):
 class TestCore(unittest.TestCase):
 
     def test_KS_synthetic_input(self):
-        save_output=True
+        save_output=False
         
         excitation_length = 0.005
         excitation_amplitude_scale = 10
@@ -229,10 +229,9 @@ class TestCore(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    test = TestCore()
-    
     unittest.main()
     
+    #test = TestCore()
     #test.test_KS_synthetic_input()
     #test.test_KS_differentiability()
     

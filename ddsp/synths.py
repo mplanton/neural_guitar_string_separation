@@ -1009,7 +1009,7 @@ class KarplusStrong(processors.Processor):
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
                 excitation = self.excitation_block[..., offset + i]
-                f = self.hp(self.lp(self.dl(last_y)))
-                out[..., offset + i] = excitation + f
+                f = self.hp(self.dl(last_y))
+                out[..., offset + i] = self.lp(excitation + f)
                 last_y = out[..., offset + i]
         return out
