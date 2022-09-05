@@ -1,18 +1,10 @@
-# Unsupervised Audio Source Separation Using Differentiable Parametric Source Models	
+# Unsupervised Guitar String Music Source Separation
 
-This is the source code for the experiments related to the paper [Unsupervised Audio Source Separation Using Differentiable Parametric Source Models](https://arxiv.org/abs/2201.09592).  
+It contains a re-implementation of parts of the DDSP library in PyTorch.
 
-It contains a re-implementation of parts of the DDSP library in PyTorch. We added a differentiable all-pole filter which can be parameterized by line spectral frequencies or reflection coefficients. 
+[original code](https://github.com/schufo/umss)
 
-Please cite the paper, if you use parts of the code in your work.
-
-**Modified by Manuel Planton for Guitar String separation.**
-
-
-## Links
-[:loud_sound: Audio examples](https://schufo.github.io/umss/)
-
-[:page_facing_up: Paper](https://arxiv.org/abs/2201.09592)
+[original paper](https://arxiv.org/abs/2201.09592)
 
 
 ## Requirements
@@ -59,16 +51,16 @@ This bash script takes the trained model and
 * plots evaluation statistics, and
 * does inference.
 
-        Usage: examination.sh <trained-model-path> <test-set> <'list.wav of.wav test.wav fil    es.wav'>
-        bash examination.sh trained_models/KarplusStrong_ex1/ Guitarset '05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav'
+        Usage: examination.sh <trained-model-path> <test-set> <which> <'list.wav of.wav test.wav fil    es.wav'>
+        bash examination.sh trained_models/KarplusStrong_ex1/ Guitarset best '05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav'
 
 (Do not forget the apostrophes around the list of test files.)
 It does so by executing the following python scripts (plot_learning_curves.py, eval.py, eval_show_stats.py, inference.py, etc.).
 
 
-## Evaluation
+### Evaluation
 
-        python eval.py --tag 'KarplusStrong_ex1' --test-set 'Guitarset'
+        python eval.py --tag 'KarplusStrong_ex1' --which best --test-set 'Guitarset'
 
 ### Show statistics of evaluation
 
@@ -83,16 +75,15 @@ The baseline metrics are taken from the first model path.
 Plots are saved under `eval_compare/date/`.
 
 
-## Inference
+### Inference
 
-        python inference.py --tag 'TAG' --which 'best' --test-set Guitarset --song-names 05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav
+        python inference.py --tag 'TAG' --which best --test-set Guitarset --song-names 05_SS3-98-C_comp_hex_cln.wav 02_BN1-129-Eb_comp_hex_cln.wav
 
-
-## Acknowledgment
-
-This project has received funding from the European Union's Horizon 2020 research and innovation programme under the Marie Skłodowska-Curie grant agreement No. 765068.
 
 ## Copyright
 
 Copyright 2021 Kilian Schulze-Forster of Télécom Paris, Institut Polytechnique de Paris.
 All rights reserved.
+
+**Modified by Manuel Planton for Guitar String separation.**
+
