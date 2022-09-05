@@ -856,11 +856,10 @@ class KarplusStrong(processors.Processor):
         self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
         # Use just white noise as excitation signal by now...
         self.excitation = torch.rand(self.n_excitation_samples) * 2 - 1
-        self.filtered_excitation = torch.zeros_like(self.excitation)
         
         # Excitation filter
-        self.lp_ex = core.SimpleLowpass(batch_size=1,
-                                        n_filters=1,
+        self.lp_ex = core.SimpleLowpass(batch_size=batch_size,
+                                        n_filters=n_strings,
                                         sr=sample_rate)
         
         self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
@@ -883,7 +882,6 @@ class KarplusStrong(processors.Processor):
         self.lp_ex.detach()
         
         # Pytorch tensors
-        self.filtered_excitation = self.filtered_excitation.detach()
         self.excitation_block = self.excitation_block.detach()
         self.last_excitation_overhead = self.last_excitation_overhead.detach()
         
@@ -911,13 +909,10 @@ class KarplusStrong(processors.Processor):
                 signals. One index is [batch, string, onset_frame],
                 torch.tensor of shape [n_onset_indices, 3]
             fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
-                   torch.Tensor of shape [n_onset_indices, 1]
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
             a: Excitation amplitude factor scaled to [0, 1],
-                   torch.Tensor of shape [n_onset_indices, 1]
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
         """
-        assert f0_hz.shape == fc.shape, \
-            "Shapes of f0_hz and fc must be equal, but shapes " \
-            f"of f0_hz: {f0_hz.shape}, fc {fc.shape}"
         n_frames = f0_hz.shape[2]
         
         # If note is off, stay at last valid fundamental frequency.
@@ -935,33 +930,33 @@ class KarplusStrong(processors.Processor):
         a = a * self.excitation_amplitude_scale
         
         # Fundamental periods
-        t0s = core.safe_divide(1, f0_hz)
+        t0 = core.safe_divide(1, f0_hz)
         # Limit fundamental period to maximum delay
-        t0s [t0s > self.max_delay] = self.max_delay
+        t0 [t0 > self.max_delay] = self.max_delay
         
-        return {"t0s": t0s,
-                'fcs': fc,
+        return {"t0": t0,
+                'fc': fc,
                 'onset_frame_indices': onset_frame_indices,
-                'fcs_ex': fc_ex,
+                'fc_ex': fc_ex,
                 'a': a}
     
 
-    def get_signal(self, t0s, fcs, onset_frame_indices, fcs_ex, a, **kwargs):
+    def get_signal(self, t0, fc, onset_frame_indices, fc_ex, a, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
         Args:
-            t0s: Fundamental periods of the played notes in seconds,
+            t0: Fundamental periods of the played notes in seconds,
                  torch.Tensor of shape [batch_size, n_strings, n_frames]
-            fcs: Loop filter cutoff frequency in Hertz,
+            fc: Loop filter cutoff frequency in Hertz,
                  torch.Tensor of shape [batch_size, n_strings, n_frames]
             onset_frame_indices: Note onset frame indices to trigger excitation
                  signals. One index is [batch, string, onset_frame],
                  torch.tensor of shape [n_onset_indices, 3]
             fc_ex: Excitation filter cutoff frequency in Hertz,
-                 torch.Tensor of shape [n_onset_indices, 1]
+                 torch.Tensor of shape [batch_size, n_strings, n_frames]
             a: Excitation amplitude factor,
-                 torch.Tensor of shape [n_onset_indices, 1]
+                 torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
             The synthesized example of string sounds from the given parameters,
@@ -976,15 +971,7 @@ class KarplusStrong(processors.Processor):
             # Convert from frame rate to audio rate.
             start = onset_index[2].item() * self.audio_frame_size
             stop = start + self.n_excitation_samples
-            # Filter the excitation signal
-            fc_ex = fcs_ex[n].unsqueeze(-1)
-            self.lp_ex.set_fc(fc_ex)
-            self.filtered_excitation = torch.zeros_like(self.excitation)
-            for i in range(self.n_excitation_samples):
-                x_in = self.excitation[..., i].unsqueeze(-1).unsqueeze(-1)
-                self.filtered_excitation[i] = a[n] * self.lp_ex(x_in)
-            self.lp_ex.clear_state()
-            self.excitation_block[batch, string, start : stop] = self.filtered_excitation
+            self.excitation_block[batch, string, start : stop] = self.excitation
         
         # Store excitation overhead for next example and resize the
         # excitation block to the correct length.
@@ -996,19 +983,22 @@ class KarplusStrong(processors.Processor):
         out = torch.zeros_like(self.excitation_block)
         f = torch.zeros((self.batch_size, self.n_strings))
         last_y = torch.zeros((self.batch_size, self.n_strings))
-        n_frames = fcs.shape[2]
+        n_frames = fc.shape[2]
         for frame_idx in range(n_frames):
             # Set parameters to the played notes.
-            t0 = t0s[:, :, frame_idx]
-            self.dl.set_delay(t0)
-            fc = fcs[:, :, frame_idx]
-            self.lp.set_fc(fc)
+            t0_f = t0[:, :, frame_idx]
+            self.dl.set_delay(t0_f)
+            fc_f = fc[:, :, frame_idx]
+            self.lp.set_fc(fc_f)
+            fc_ex_f = fc_ex[:, :, frame_idx]
+            self.lp_ex.set_fc(fc_ex_f)
+            a_f = a[:, :, frame_idx]
             
             # Synthesize one frame of audio with the (extended) Karplus-Strong
             # model.
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
-                excitation = self.excitation_block[..., offset + i]
+                excitation = a_f * self.lp_ex(self.excitation_block[..., offset + i])
                 f = self.hp(self.dl(last_y))
                 out[..., offset + i] = self.lp(excitation + f)
                 last_y = out[..., offset + i]

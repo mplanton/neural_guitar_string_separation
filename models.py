@@ -256,12 +256,10 @@ class KarplusStrongAutoencoder(_Model):
                                             output_size=decoder_output_size,
                                             bidirectional=bidirectional)
         
-        # Excitation controls prediction
-        self.fc_ex_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
-        self.a_decoder = nc.ExcitationParameterDecoder(input_size=decoder_output_size)
-        
-        # Feedback filter control prediction
+        # Frame-wise control prediction
         self.fc_linear = torch.nn.Linear(decoder_output_size, 1)
+        self.fc_ex_linear = torch.nn.Linear(decoder_output_size, 1)
+        self.a_linear = torch.nn.Linear(decoder_output_size, 1)
         
         # synth
         upsampling_factor = physical_modeling_sample_rate / sample_rate
@@ -363,17 +361,25 @@ class KarplusStrongAutoencoder(_Model):
         f0_hz_dec = f0_hz_dec.unsqueeze(-1)
         x = self.decoder(f0_hz=f0_hz_dec, z=z)
         
+        # fc prediction
         x_fc = self.fc_linear(x)
         fc = core.exp_sigmoid(x_fc)
         fc = fc.squeeze(-1)
         fc = torch.reshape(fc, (batch_size, n_sources, n_frames))
+        
+        # fc_ex prediction
+        x_fc_ex = self.fc_ex_linear(x)
+        fc_ex = core.exp_sigmoid(x_fc_ex)
+        fc_ex = fc_ex.squeeze(-1)
+        fc_ex = torch.reshape(fc_ex, (batch_size, n_sources, n_frames))
+        
+        # a prediction
+        x_a = self.fc_linear(x)
+        a = core.exp_sigmoid(x_a)
+        a = a.squeeze(-1)
+        a = torch.reshape(a, (batch_size, n_sources, n_frames))
 
         onset_frame_indices = self.onset_detection(f0_hz)
-
-        # Predict the excitation controls.
-        fc_ex = self.fc_ex_decoder(x, onset_frame_indices)
-        a = self.a_decoder(x, onset_frame_indices)
-        
 
         # Apply the synthesis model.
         pm_sources = self.ks_synth(f0_hz=f0_hz,

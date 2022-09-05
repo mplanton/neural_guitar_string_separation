@@ -36,9 +36,9 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
             signals. One index is [batch, string, onset_frame],
             torch.tensor of shape [n_examples, n_onset_indices, 3]
         fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
-               torch.Tensor of shape [n_examples, n_onset_indices, 1]
+               torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
         a: Excitation amplitude factor scaled to [0, 1],
-               torch.Tensor of shape [n_onset_indices, 1]
+               torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
     """
     # onset_frame_indices: Note onset frame indices to trigger excitation
     #     signals. One index is [batch, string, onset_frame],
@@ -73,30 +73,21 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
     fcs = torch.linspace(fc_min, fc_max, n_sources)
     fc = expand_constant(fcs, n_examples, batch_size, n_frames)
     
-    
     # fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
-    #        torch.Tensor of shape [n_examples, n_onset_indices, 1]
-    fc_min = 0.1
-    fc_max = 1
-    fc_ex = torch.linspace(fc_min, fc_max, n_onset_indices)
-    fc_ex = fc_ex.unsqueeze(0).repeat(n_examples, 1).unsqueeze(-1)
-    
-    #a: Excitation amplitude factor scaled to [0, 1],
-    #       torch.Tensor of shape [n_onset_indices, 1]
-    a_min = 0.01
-    a_max = 1
-    a = torch.linspace(a_min, a_max, n_onset_indices)
-    a = a.unsqueeze(0).repeat(n_examples, 1).unsqueeze(-1)
+    #        torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+    fc_ex_min = 0.1
+    fc_ex_max = 1
+    fc_ex = torch.linspace(fc_ex_min, fc_ex_max, n_sources)
+    fc_ex = expand_constant(fc_ex, n_examples, batch_size, n_frames)
+
+    # a: Excitation amplitude factor scaled to [0, 1],
+    #    torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+    a_min = 1
+    a_max = 0.1
+    a = torch.linspace(a_min, a_max, n_sources)
+    a = expand_constant(a, n_examples, batch_size, n_frames)
     
     return f0_hz, fc, onset_frame_indices, fc_ex, a
-
-
-def check_attributes_for_gradients(object):
-    """
-    Check the attributes of an object for requiering a gradient.
-    """
-    attributes = object.__dict__
-    print(attributes)
 
 
 class TestCore(unittest.TestCase):
