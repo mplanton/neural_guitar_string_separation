@@ -13,7 +13,7 @@ import os
 import copy
 import configargparse
 import shutil
-import git
+#import git
 
 
 from torch.utils.tensorboard import SummaryWriter
@@ -290,8 +290,8 @@ def main():
     args, _ = parser.parse_known_args()
 
     # Get git commit ID
-    repo = git.Repo(search_parent_directories=True)
-    git_sha = repo.head.object.hexsha
+    #repo = git.Repo(search_parent_directories=True)
+    #git_sha = repo.head.object.hexsha
 
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     print("Using GPU:", use_cuda)
@@ -456,7 +456,7 @@ def main():
         }
         
         params = {
-            'git_sha': git_sha,
+            #'git_sha': git_sha,
             'epochs_trained': epoch,
             'args': vars(args),
             'best_loss': es.best,
