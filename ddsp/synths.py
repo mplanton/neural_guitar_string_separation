@@ -897,7 +897,7 @@ class KarplusStrong(processors.Processor):
                 element.clear_state()
     
 
-    def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex, a):
+    def get_controls(self, f0_hz, fc, onset_frame_indices, fc_ex, a, g):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
@@ -911,6 +911,8 @@ class KarplusStrong(processors.Processor):
             fc_ex: Excitation filter cutoff frequency scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
             a: Excitation amplitude factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            g: Feedback gain factor between [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         """
         n_frames = f0_hz.shape[2]
@@ -938,10 +940,11 @@ class KarplusStrong(processors.Processor):
                 'fc': fc,
                 'onset_frame_indices': onset_frame_indices,
                 'fc_ex': fc_ex,
-                'a': a}
+                'a': a,
+                'g': g}
     
 
-    def get_signal(self, t0, fc, onset_frame_indices, fc_ex, a, **kwargs):
+    def get_signal(self, t0, fc, onset_frame_indices, fc_ex, a, g, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
@@ -957,6 +960,8 @@ class KarplusStrong(processors.Processor):
                  torch.Tensor of shape [batch_size, n_strings, n_frames]
             a: Excitation amplitude factor,
                  torch.Tensor of shape [batch_size, n_strings, n_frames]
+            g: Feedback gain factor between [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
             The synthesized example of string sounds from the given parameters,
@@ -993,13 +998,14 @@ class KarplusStrong(processors.Processor):
             fc_ex_f = fc_ex[:, :, frame_idx]
             self.lp_ex.set_fc(fc_ex_f)
             a_f = a[:, :, frame_idx]
+            g_f = g[:, :, frame_idx]
             
             # Synthesize one frame of audio with the (extended) Karplus-Strong
             # model.
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
                 excitation = a_f * self.lp_ex(self.excitation_block[..., offset + i])
-                f = self.hp(self.dl(last_y))
+                f = g_f * self.hp(self.dl(last_y))
                 out[..., offset + i] = self.lp(excitation + f)
                 last_y = out[..., offset + i]
         return out

@@ -39,6 +39,8 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
                torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
         a: Excitation amplitude factor scaled to [0, 1],
                torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+        g: Feedback gain factor between [0, 1],
+               torch.Tensor of shape [batch_size, n_strings, n_frames]
     """
     # onset_frame_indices: Note onset frame indices to trigger excitation
     #     signals. One index is [batch, string, onset_frame],
@@ -87,7 +89,14 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
     a = torch.linspace(a_min, a_max, n_sources)
     a = expand_constant(a, n_examples, batch_size, n_frames)
     
-    return f0_hz, fc, onset_frame_indices, fc_ex, a
+    #g: Feedback gain factor between [0, 1],
+    #       torch.Tensor of shape [batch_size, n_strings, n_frames]
+    g_min = 0.1
+    g_max = 1
+    g = torch.linspace(g_min, g_max, n_sources)
+    g = expand_constant(g, n_examples, batch_size, n_frames)
+    
+    return f0_hz, fc, onset_frame_indices, fc_ex, a, g
 
 
 class TestCore(unittest.TestCase):
@@ -112,7 +121,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, onset_frame_indices, fc_ex, a = \
+        f0_hz, fc, onset_frame_indices, fc_ex, a, g = \
             generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
@@ -134,12 +143,14 @@ class TestCore(unittest.TestCase):
             onset_frame_indices_in = onset_frame_indices[example]
             fc_ex_in = fc_ex[example]
             a_in = a[example]
+            g_in = g[example]
             
             controls = ks.get_controls(f0_in,
                                        fc_in,
                                        onset_frame_indices_in,
                                        fc_ex_in,
-                                       a_in)
+                                       a_in,
+                                       g_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         mix = sources.sum(dim=1)
         
@@ -173,7 +184,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, fc, onset_frame_indices, fc_ex, a = \
+        f0_hz, fc, onset_frame_indices, fc_ex, a, g = \
             generateParameters(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrong(batch_size=batch_size,
@@ -192,6 +203,7 @@ class TestCore(unittest.TestCase):
             onset_frame_indices_in = onset_frame_indices[example]
             fc_ex_in = fc_ex[example]
             a_in = a[example]
+            g_in = g[example]
             
             #check_attributes_for_gradients(ks)
 
@@ -202,13 +214,16 @@ class TestCore(unittest.TestCase):
                 fc_ex_in.grad.zero_()
             if a_in.grad is not None:
                 a_in.grad.zero_()
+            if g_in.grad is not None:
+                g_in.grad.zero_()
             
             # Predicted controls from the neural network.
             fc_in.requires_grad = True
             fc_ex_in.requires_grad = True
             a_in.requires_grad = True
+            g_in.requires_grad = True
             
-            sources = ks(f0_in, fc_in, onset_frame_indices_in, fc_ex_in, a_in)
+            sources = ks(f0_in, fc_in, onset_frame_indices_in, fc_ex_in, a_in, g_in)
             # Dummy cost function
             error = sources.sum()
             
