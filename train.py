@@ -13,7 +13,7 @@ import os
 import copy
 import configargparse
 import shutil
-#import git
+import git
 
 
 from torch.utils.tensorboard import SummaryWriter
@@ -68,8 +68,9 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writ
         
         pbar.set_description("Training batch (train_loss: %4.3f)" % loss)
         
-        loss.backward()
-        optimizer.step()
+        # Commented out for KSB dummy training
+        #loss.backward()
+        #optimizer.step()
         loss_container.update(loss.item(), f0.size(0))
         global writer_counter
         writer.add_scalar("Training_loss_immediate", loss.item(), writer_counter)
@@ -290,8 +291,8 @@ def main():
     args, _ = parser.parse_known_args()
 
     # Get git commit ID
-    #repo = git.Repo(search_parent_directories=True)
-    #git_sha = repo.head.object.hexsha
+    repo = git.Repo(search_parent_directories=True)
+    git_sha = repo.head.object.hexsha
 
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     print("Using GPU:", use_cuda)
@@ -456,7 +457,7 @@ def main():
         }
         
         params = {
-            #'git_sha': git_sha,
+            'git_sha': git_sha,
             'epochs_trained': epoch,
             'args': vars(args),
             'best_loss': es.best,
