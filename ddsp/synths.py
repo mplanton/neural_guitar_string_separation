@@ -1088,7 +1088,7 @@ class KarplusStrongB(processors.Processor):
         self.excitation_block = self.excitation_block.detach()
         self.last_excitation_overhead = self.last_excitation_overhead.detach()
 
-    def get_controls(self, f0_hz, onset_frame_indices):
+    def get_controls(self, f0_hz, onset_frame_indices, a):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
@@ -1097,6 +1097,8 @@ class KarplusStrongB(processors.Processor):
             onset_frame_indices: Note onset frame indices to trigger excitation
                 signals. One index is [batch, string, onset_frame],
                 torch.tensor of shape [n_onset_indices, 3]
+            a: Excitation amplitude factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
         """
         n_frames = f0_hz.shape[2]
         
@@ -1115,10 +1117,11 @@ class KarplusStrongB(processors.Processor):
         t0 [t0 > self.max_delay] = self.max_delay
         
         return {"t0": t0,
-                'onset_frame_indices': onset_frame_indices}
+                "onset_frame_indices": onset_frame_indices,
+                "a": a}
     
 
-    def get_signal(self, t0, onset_frame_indices, **kwargs):
+    def get_signal(self, t0, onset_frame_indices, a, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
@@ -1128,6 +1131,8 @@ class KarplusStrongB(processors.Processor):
             onset_frame_indices: Note onset frame indices to trigger excitation
                  signals. One index is [batch, string, onset_frame],
                  torch.tensor of shape [n_onset_indices, 3]
+            a: Excitation amplitude factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
             The synthesized example of string sounds from the given parameters,
@@ -1159,13 +1164,14 @@ class KarplusStrongB(processors.Processor):
             # Set t0 and predicted parameters
             t0_in = t0[:, :, frame_idx]
             self.dl.set_delay(t0_in)
+            a_in = a[:, :, frame_idx]
             
             # Synthesize one frame of audio with the (extended) Karplus-Strong
             # model.
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
-                x = self.excitation_block[..., offset + i]
+                x_e = a_in * self.excitation_block[..., offset + i]
                 f = self.hp(self.dl(last_y))
-                y[..., offset + i] = self.Ha(x + f)
+                y[..., offset + i] = self.Ha(x_e + f)
                 last_y = y[..., offset + i]
         return y

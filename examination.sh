@@ -101,6 +101,11 @@ mv $tag$f_names $plots_path
 echo "Saved learning curves to $plots_path."
 echo
 
+echo
+echo "Inference..."
+python3 inference.py --tag $tag --which $which_model --test-set $test_set --song-names $test_files
+echo "Inference done."
+
 echo "Evaluation..."
 python3 eval.py --tag $tag --which $which_model --test-set $test_set
 echo "Evaluation done."
@@ -110,9 +115,3 @@ python3 eval_show_stats.py --tag $tag --info-json $json_file --box-plot
 f_names="_eval_*.*"
 mv $tag$f_names $plots_path
 echo "Saved evaluation statistics plots to $plots_path."
-
-echo
-echo "Inference..."
-python3 inference.py --tag $tag --which $which_model --test-set $test_set --song-names $test_files
-echo "Inference done."
-

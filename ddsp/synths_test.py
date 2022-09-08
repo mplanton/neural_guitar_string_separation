@@ -117,6 +117,8 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
         onset_frame_indices: Note onset frame indices to trigger excitation
             signals. One index is [batch, string, onset_frame],
             torch.tensor of shape [n_examples, n_onset_indices, 3]
+        a: Excitation amplitude factor scaled to [0, 1],
+               torch.Tensor of shape [batch_size, n_strings, n_frames]
     """
     # onset_frame_indices: Note onset frame indices to trigger excitation
     #     signals. One index is [batch, string, onset_frame],
@@ -144,7 +146,14 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
     f0s = torch.linspace(f0_min, f0_max, n_sources)
     f0_hz = expand_constant(f0s, n_examples, batch_size, n_frames)
     
-    return f0_hz, onset_frame_indices
+    # a: Excitation amplitude factor scaled to [0, 1],
+    #    torch.Tensor of shape [n_examples, batch_size, n_strings, n_frames]
+    a_min = 1
+    a_max = 0.1
+    a = torch.linspace(a_min, a_max, n_sources)
+    a = expand_constant(a, n_examples, batch_size, n_frames)
+    
+    return f0_hz, onset_frame_indices, a
 
 
 class TestCore(unittest.TestCase):
@@ -283,14 +292,14 @@ class TestCore(unittest.TestCase):
 
 
     def test_KSB_synthetic_input(self):
-        save_output=True
+        save_output=False
         
         excitation_length = 0.005
         n_examples = 2
         batch_size = 2
         sr = 16000
-        example_length = 2
-        #example_length = 0.16 # sec
+        #example_length = 2
+        example_length = 0.16 # sec
         # Number of sources in the mix
         J = 6
         # The FFT hop size is the audio frame length
@@ -301,7 +310,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, onset_frame_indices = \
+        f0_hz, onset_frame_indices, a = \
             generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrongB(batch_size=batch_size,
@@ -319,9 +328,11 @@ class TestCore(unittest.TestCase):
             
             f0_in = f0_hz[example]
             onset_frame_indices_in = onset_frame_indices[example]
+            a_in = a[example]
             
             controls = ks.get_controls(f0_in,
-                                       onset_frame_indices_in)
+                                       onset_frame_indices_in,
+                                       a_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         
         # Save sources
@@ -330,11 +341,66 @@ class TestCore(unittest.TestCase):
                 wavfile.write(f"KSBsynth_sources_batch{batch}.wav", sr,
                               sources[batch].T.numpy())
 
+    def test_KSB_differentiability(self):
+        excitation_length=0.005
+        n_examples = 2
+        batch_size = 2
+        sr = 16000
+        example_length = 0.16 # sec
+        # Number of sources in the mix
+        J = 2
+        # The FFT hop size is the audio frame length
+        fft_hop_size = 256
+        frame_rate = sr // fft_hop_size
+        # Nuber of time samples per train example
+        M = int(example_length * sr)
+        # Number of STFT time frames per train example
+        N = int(M / fft_hop_size)
+        
+        f0_hz, onset_frame_indices, a = \
+            generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
+        
+        ks = synths.KarplusStrongB(batch_size=batch_size,
+                                  n_samples=M,
+                                  sample_rate=sr,
+                                  audio_frame_size=fft_hop_size,
+                                  n_strings=J,
+                                  min_freq=20,
+                                  excitation_length=excitation_length)
+        
+        for example in range(n_examples):
+            #print("Calculate example", example)
+            f0_in = f0_hz[example]
+            onset_frame_indices_in = onset_frame_indices[example]
+            a_in = a[example]
+            
+            #check_attributes_for_gradients(ks)
+
+            # Zeroing out the gradient
+            if a_in.grad is not None:
+                a_in.grad.zero_()
+            
+            # Predicted controls from the neural network.
+            a_in.requires_grad = True
+            
+            sources = ks(f0_in,
+                         onset_frame_indices_in,
+                         a_in)
+            # Dummy cost function
+            error = sources.sum()
+            
+            #print("Do backward pass.")
+            error.backward()
+        
+            # Disable gradient tracking.
+            ks.detach()
+
 if __name__ == "__main__":
-    #unittest.main()
-    
-    test = TestCore()
+    unittest.main()
+
+    #test = TestCore()
     
     #test.test_KS_synthetic_input()
     #test.test_KS_differentiability()
-    test.test_KSB_synthetic_input()
+    #test.test_KSB_synthetic_input()
+    #test.test_KSB_differentiability()
