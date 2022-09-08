@@ -449,7 +449,9 @@ class KarplusStrongAutoencoderB(_Model):
                  decoder_output_size=512,
                  bidirectional=True,
                  return_sources=False,
-                 return_synth_controls=False):
+                 return_synth_controls=False,
+                 maximum_excitation_amplitude=0.99,
+                 maximum_feedback_factor=0.99):
         super().__init__()
 
         # attributes
@@ -480,6 +482,7 @@ class KarplusStrongAutoencoderB(_Model):
         
         # Frame-wise control prediction
         self.a_linear = torch.nn.Linear(decoder_output_size, 1)
+        self.rho_linear = torch.nn.Linear(decoder_output_size, 1)
         
         # synth
         upsampling_factor = physical_modeling_sample_rate / sample_rate
@@ -491,7 +494,9 @@ class KarplusStrongAutoencoderB(_Model):
                                             audio_frame_size=pm_hop_size,
                                             n_strings=len(allowed_strings),
                                             min_freq=20,
-                                            excitation_length=0.005)
+                                            excitation_length=0.005,
+                                            maximum_excitation_amplitude=maximum_excitation_amplitude,
+                                            maximum_feedback_factor=maximum_feedback_factor)
         
         # Resampler to resample physical modeling output to system sample rate.
         self.resampler = torchaudio.transforms.Resample(orig_freq=physical_modeling_sample_rate,
@@ -513,6 +518,8 @@ class KarplusStrongAutoencoderB(_Model):
         bidirectional = not config['unidirectional'] if 'unidirectional' in keys else True
         return_sources = config['return_sources'] if 'return_sources' in keys else False
         return_synth_controls = config['return_synth_controls'] if 'return_synth_controls' in keys else False
+        maximum_excitation_amplitude = config['maximum_excitation_amplitude'] if 'maximum_excitation_amplitude' in keys else 0.99
+        maximum_feedback_factor = config['maximum_feedback_factor'] if 'maximum_feedback_factor' in keys else 0.99
         
         return cls(batch_size=batch_size,
                    allowed_strings=allowed_strings,
@@ -527,7 +534,9 @@ class KarplusStrongAutoencoderB(_Model):
                    decoder_output_size=decoder_output_size,
                    bidirectional=bidirectional,
                    return_sources=return_sources,
-                   return_synth_controls=return_synth_controls)
+                   return_synth_controls=return_synth_controls,
+                   maximum_excitation_amplitude=maximum_excitation_amplitude,
+                   maximum_feedback_factor=maximum_feedback_factor)
 
     def onset_detection(self, f0_hz):
         """
@@ -585,11 +594,18 @@ class KarplusStrongAutoencoderB(_Model):
         a = core.exp_sigmoid(x_a)
         a = a.squeeze(-1)
         a = torch.reshape(a, (batch_size, n_sources, n_frames))
+        
+        # rho prediction
+        x_rho = self.rho_linear(x)
+        rho = core.exp_sigmoid(x_rho)
+        rho = rho.squeeze(-1)
+        rho = torch.reshape(rho, (batch_size, n_sources, n_frames))
 
         # Apply the synthesis model.
         pm_sources = self.ks_synth(f0_hz=f0_hz,
                                    onset_frame_indices=onset_frame_indices,
-                                   a=a)
+                                   a=a,
+                                   rho=rho)
         if self.sample_rate != self.physical_modeling_sample_rate:
             # Resample
             sources = self.resampler(pm_sources)
@@ -599,7 +615,8 @@ class KarplusStrongAutoencoderB(_Model):
         synth_controls = {
             'f0_hz': f0_hz.detach(),
             'onset_frame_indices': onset_frame_indices.detach(),
-            'a': a.detach()
+            'a': a.detach(),
+            'rho': rho.detach()
         }
 
         if self.return_sources and (self.return_synth_controls or return_synth_controls):

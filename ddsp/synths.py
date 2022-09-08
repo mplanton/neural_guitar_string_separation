@@ -1032,7 +1032,9 @@ class KarplusStrongB(processors.Processor):
                  audio_frame_size=256,
                  n_strings=6,
                  min_freq=20,
-                 excitation_length=0.005):
+                 excitation_length=0.005,
+                 maximum_excitation_amplitude=0.99,
+                 maximum_feedback_factor=0.99):
         assert n_samples % audio_frame_size == 0.0, \
             f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
         
@@ -1043,6 +1045,8 @@ class KarplusStrongB(processors.Processor):
         self.audio_frame_size = audio_frame_size
         self.n_strings = n_strings
         self.min_freq = min_freq
+        self.maximum_excitation_amplitude = maximum_excitation_amplitude
+        self.maximum_feedback_factor = maximum_feedback_factor
         
         # Delay line
         self.max_delay = 1 / min_freq
@@ -1088,16 +1092,19 @@ class KarplusStrongB(processors.Processor):
         self.excitation_block = self.excitation_block.detach()
         self.last_excitation_overhead = self.last_excitation_overhead.detach()
 
-    def get_controls(self, f0_hz, onset_frame_indices, a):
+    def get_controls(self, f0_hz, onset_frame_indices, a, rho):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
             f0_hz: Fundamental frequencies in Hertz,
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
             onset_frame_indices: Note onset frame indices to trigger excitation
-                signals. One index is [batch, string, onset_frame],
-                torch.tensor of shape [n_onset_indices, 3]
+                   signals. One index is [batch, string, onset_frame],
+                   torch.tensor of shape [n_onset_indices, 3]
             a: Excitation amplitude factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            rho: feedback loop factor for decay shortening and note ends scaled
+                   to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         """
         n_frames = f0_hz.shape[2]
@@ -1116,12 +1123,17 @@ class KarplusStrongB(processors.Processor):
         # Limit fundamental period to maximum delay
         t0 [t0 > self.max_delay] = self.max_delay
         
+        # Scale parameters
+        a = self.maximum_excitation_amplitude * a
+        rho = self.maximum_feedback_factor * rho
+        
         return {"t0": t0,
                 "onset_frame_indices": onset_frame_indices,
-                "a": a}
+                "a": a,
+                "rho": rho}
     
 
-    def get_signal(self, t0, onset_frame_indices, a, **kwargs):
+    def get_signal(self, t0, onset_frame_indices, a, rho, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
@@ -1131,7 +1143,9 @@ class KarplusStrongB(processors.Processor):
             onset_frame_indices: Note onset frame indices to trigger excitation
                  signals. One index is [batch, string, onset_frame],
                  torch.tensor of shape [n_onset_indices, 3]
-            a: Excitation amplitude factor scaled to [0, 1],
+            a: Excitation amplitude factor,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            rho: feedback loop factor for decay shortening and note ends,
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
@@ -1165,13 +1179,14 @@ class KarplusStrongB(processors.Processor):
             t0_in = t0[:, :, frame_idx]
             self.dl.set_delay(t0_in)
             a_in = a[:, :, frame_idx]
+            rho_in = rho[:, :, frame_idx]
             
             # Synthesize one frame of audio with the (extended) Karplus-Strong
             # model.
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
                 x_e = a_in * self.excitation_block[..., offset + i]
-                f = self.hp(self.dl(last_y))
+                f = rho_in * self.hp(self.dl(last_y))
                 y[..., offset + i] = self.Ha(x_e + f)
                 last_y = y[..., offset + i]
         return y

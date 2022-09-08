@@ -265,8 +265,10 @@ def main():
     parser.add_argument('--voiced-unvoiced-same-noise', action='store_true', default=False)
     parser.add_argument('--physical-modeling-sample-rate', type=int, default=16000,
                         help='Sample rate of the physical model which influences the range of fc.')
-    parser.add_argument('--excitation-amplitude-scale', type=float, default=10,
-                        help='Maximum value of the excitation amplitude factor.')
+    parser.add_argument('--maximum-excitation-amplitude', type=float, default=0.99,
+                        help='Maximum value of the excitation amplitude.')
+    parser.add_argument('--maximum-feedback-factor', type=float, default=0.99,
+                        help='Maximum value of the loop feedback factor.')
 
 
     parser.add_argument('--nb-workers', type=int, default=4,
