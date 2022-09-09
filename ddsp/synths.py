@@ -5,6 +5,7 @@ import functools
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchaudio
 import numpy as np
 import scipy.signal
@@ -1186,7 +1187,9 @@ class KarplusStrongB(processors.Processor):
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
                 x_e = a_in * self.excitation_block[..., offset + i]
-                f = rho_in * self.hp(self.dl(last_y))
+                f = self.hp(self.dl(last_y))
+                # Restrict feedback for stability.
+                f = rho_in * F.hardtanh(f, min_val=-1, max_val=1)
                 y[..., offset + i] = self.Ha(x_e + f)
                 last_y = y[..., offset + i]
         return y

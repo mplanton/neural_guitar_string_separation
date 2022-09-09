@@ -159,7 +159,7 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
     #rho: feedback loop factor for decay shortening and note ends scaled
     #       to [0, 1],
     #       torch.Tensor of shape [batch_size, n_strings, n_frames]
-    rho_min = 1
+    rho_min = 0.5
     rho_max = 1
     rho = torch.linspace(rho_min, rho_max, n_sources)
     rho = expand_constant(rho, n_examples, batch_size, n_frames)
@@ -303,14 +303,14 @@ class TestCore(unittest.TestCase):
 
 
     def test_KSB_synthetic_input(self):
-        save_output=True
+        save_output=False
         
         excitation_length = 0.005
         n_examples = 2
         batch_size = 2
         sr =32000
-        example_length = 2
-        #example_length = 0.16 # sec
+        #example_length = 2
+        example_length = 0.16 # sec
         # Number of sources in the mix
         J = 6
         # The FFT hop size is the audio frame length
@@ -414,11 +414,11 @@ class TestCore(unittest.TestCase):
             ks.detach()
 
 if __name__ == "__main__":
-    #unittest.main()
+    unittest.main()
 
-    test = TestCore()
+    #test = TestCore()
     
     #test.test_KS_synthetic_input()
     #test.test_KS_differentiability()
-    test.test_KSB_synthetic_input()
+    #test.test_KSB_synthetic_input()
     #test.test_KSB_differentiability()
