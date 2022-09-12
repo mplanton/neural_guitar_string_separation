@@ -1694,7 +1694,7 @@ class HaDecayStretch:
     
     def set_coeff(self, s):
         """
-        fc: torch.tensor of shape [batch_size, n_filters],
+        s: torch.tensor of shape [batch_size, n_filters],
             the new filter coefficients for the filters.
         """
         assert s.shape == self.s.shape, \

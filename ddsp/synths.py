@@ -1025,6 +1025,8 @@ class KarplusStrongB(processors.Processor):
         n_strings: int, number of strings
         min_freq: minimum frequency that can be synthesized
         excitation_length: Length of the excitation signal in seconds
+        maximum_excitation_amplitude: Maximum amplitude value of the excitation signal
+        maximum_feedback_factor: The maximum value of the loop feedback factor
     """
     def __init__(self,
                  batch_size=4,
@@ -1057,7 +1059,7 @@ class KarplusStrongB(processors.Processor):
                                  sr=sample_rate)
         
         # Loop lowpass filter
-        self.Ha = core.HaOriginal(batch_size=batch_size, n_filters=n_strings)
+        self.Ha = core.HaDecayStretch(batch_size=batch_size, n_filters=n_strings)
         
         # DC blocking loop highpass filter with fc = 20Hz to avoid
         # low frequency ringing.
@@ -1093,7 +1095,7 @@ class KarplusStrongB(processors.Processor):
         self.excitation_block = self.excitation_block.detach()
         self.last_excitation_overhead = self.last_excitation_overhead.detach()
 
-    def get_controls(self, f0_hz, onset_frame_indices, a, rho):
+    def get_controls(self, f0_hz, onset_frame_indices, a, s):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
@@ -1104,8 +1106,7 @@ class KarplusStrongB(processors.Processor):
                    torch.tensor of shape [n_onset_indices, 3]
             a: Excitation amplitude factor scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
-            rho: feedback loop factor for decay shortening and note ends scaled
-                   to [0, 1],
+            s: Decay stretching factor scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         """
         n_frames = f0_hz.shape[2]
@@ -1126,15 +1127,15 @@ class KarplusStrongB(processors.Processor):
         
         # Scale parameters
         a = self.maximum_excitation_amplitude * a
-        rho = self.maximum_feedback_factor * rho
+        s = 0.1 + 0.9 * s
         
         return {"t0": t0,
                 "onset_frame_indices": onset_frame_indices,
                 "a": a,
-                "rho": rho}
+                "s": s}
     
 
-    def get_signal(self, t0, onset_frame_indices, a, rho, **kwargs):
+    def get_signal(self, t0, onset_frame_indices, a, s, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
@@ -1146,7 +1147,7 @@ class KarplusStrongB(processors.Processor):
                  torch.tensor of shape [n_onset_indices, 3]
             a: Excitation amplitude factor,
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
-            rho: feedback loop factor for decay shortening and note ends,
+            s: Decay stretching factor scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
@@ -1180,7 +1181,8 @@ class KarplusStrongB(processors.Processor):
             t0_in = t0[:, :, frame_idx]
             self.dl.set_delay(t0_in)
             a_in = a[:, :, frame_idx]
-            rho_in = rho[:, :, frame_idx]
+            s_in = s[:, :, frame_idx]
+            self.Ha.set_coeff(s_in)
             
             # Synthesize one frame of audio with the (extended) Karplus-Strong
             # model.
@@ -1188,8 +1190,8 @@ class KarplusStrongB(processors.Processor):
             for i in range(self.audio_frame_size):
                 x_e = a_in * self.excitation_block[..., offset + i]
                 f = self.hp(self.dl(last_y))
-                # Restrict feedback for stability.
-                f = rho_in * F.hardtanh(f, min_val=-1, max_val=1)
+                # Restrict feedback path for stability
+                f = self.maximum_feedback_factor * F.hardtanh(f, min_val=-1, max_val=1)
                 y[..., offset + i] = self.Ha(x_e + f)
                 last_y = y[..., offset + i]
         return y

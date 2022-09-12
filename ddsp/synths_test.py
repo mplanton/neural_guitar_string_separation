@@ -91,7 +91,7 @@ def generateParameters(frame_rate, batch_size, n_examples, example_length, n_fra
     
     #g: Feedback gain factor between [0, 1],
     #       torch.Tensor of shape [batch_size, n_strings, n_frames]
-    g_min = 0.1
+    g_min = 0
     g_max = 1
     g = torch.linspace(g_min, g_max, n_sources)
     g = expand_constant(g, n_examples, batch_size, n_frames)
@@ -119,8 +119,7 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
             torch.tensor of shape [n_examples, n_onset_indices, 3]
         a: Excitation amplitude factor scaled to [0, 1],
                torch.Tensor of shape [batch_size, n_strings, n_frames]
-        rho: feedback loop factor for decay shortening and note ends scaled
-               to [0, 1],
+        s: Decay stretching factor scaled to [0, 1],
                torch.Tensor of shape [batch_size, n_strings, n_frames]
     """
     # onset_frame_indices: Note onset frame indices to trigger excitation
@@ -156,15 +155,14 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
     a = torch.linspace(a_min, a_max, n_sources)
     a = expand_constant(a, n_examples, batch_size, n_frames)
     
-    #rho: feedback loop factor for decay shortening and note ends scaled
-    #       to [0, 1],
+    #s: Decay stretching factor scaled to [0, 1],
     #       torch.Tensor of shape [batch_size, n_strings, n_frames]
-    rho_min = 0.5
-    rho_max = 1
-    rho = torch.linspace(rho_min, rho_max, n_sources)
-    rho = expand_constant(rho, n_examples, batch_size, n_frames)
+    s_min = 0.1
+    s_max = 1
+    s = torch.linspace(s_min, s_max, n_sources)
+    s = expand_constant(s, n_examples, batch_size, n_frames)
     
-    return f0_hz, onset_frame_indices, a, rho
+    return f0_hz, onset_frame_indices, a, s
 
 
 class TestCore(unittest.TestCase):
@@ -308,7 +306,7 @@ class TestCore(unittest.TestCase):
         excitation_length = 0.005
         n_examples = 2
         batch_size = 2
-        sr =32000
+        sr = 32000
         #example_length = 2
         example_length = 0.16 # sec
         # Number of sources in the mix
@@ -321,7 +319,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, onset_frame_indices, a, rho = \
+        f0_hz, onset_frame_indices, a, s = \
             generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrongB(batch_size=batch_size,
@@ -340,12 +338,12 @@ class TestCore(unittest.TestCase):
             f0_in = f0_hz[example]
             onset_frame_indices_in = onset_frame_indices[example]
             a_in = a[example]
-            rho_in = rho[example]
+            s_in = s[example]
             
             controls = ks.get_controls(f0_in,
                                        onset_frame_indices_in,
                                        a_in,
-                                       rho_in)
+                                       s_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         
         # Save sources
@@ -370,7 +368,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, onset_frame_indices, a, rho = \
+        f0_hz, onset_frame_indices, a, s = \
             generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrongB(batch_size=batch_size,
@@ -386,24 +384,24 @@ class TestCore(unittest.TestCase):
             f0_in = f0_hz[example]
             onset_frame_indices_in = onset_frame_indices[example]
             a_in = a[example]
-            rho_in = rho[example]
+            s_in = s[example]
             
             #check_attributes_for_gradients(ks)
 
             # Zeroing out the gradient
             if a_in.grad is not None:
                 a_in.grad.zero_()
-            if rho_in.grad is not None:
-                rho_in.grad.zero_()
+            if s_in.grad is not None:
+                s_in.grad.zero_()
             
             # Predicted controls from the neural network.
             a_in.requires_grad = True
-            rho_in.requires_grad = True
+            s_in.requires_grad = True
             
             sources = ks(f0_in,
                          onset_frame_indices_in,
                          a_in,
-                         rho_in)
+                         s_in)
             # Dummy cost function
             error = sources.sum()
             
