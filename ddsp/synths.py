@@ -1061,6 +1061,9 @@ class KarplusStrongB(processors.Processor):
         # Loop lowpass filter
         self.Ha = core.HaDecayStretch(batch_size=batch_size, n_filters=n_strings)
         
+        # Excitation dynamics filter
+        self.Hd = core.OnePole(batch_size=batch_size, n_filters=n_strings, r=0.5)
+        
         # DC blocking loop highpass filter with fc = 20Hz to avoid
         # low frequency ringing.
         self.hp = core.SimpleHighpass(batch_size=batch_size,
@@ -1089,13 +1092,14 @@ class KarplusStrongB(processors.Processor):
         # DDSP objects
         self.dl.detach()
         self.Ha.detach()
+        self.Hd.detach()
         self.hp.detach()
         
         # Pytorch tensors
         self.excitation_block = self.excitation_block.detach()
         self.last_excitation_overhead = self.last_excitation_overhead.detach()
 
-    def get_controls(self, f0_hz, onset_frame_indices, a, s):
+    def get_controls(self, f0_hz, onset_frame_indices, a, s, r):
         """
         Convert network output tensors into a dictionary of synthesizer controls.
         Args:
@@ -1107,6 +1111,8 @@ class KarplusStrongB(processors.Processor):
             a: Excitation amplitude factor scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
             s: Decay stretching factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            r: Excitation dynamics filter coefficient scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         """
         n_frames = f0_hz.shape[2]
@@ -1132,10 +1138,11 @@ class KarplusStrongB(processors.Processor):
         return {"t0": t0,
                 "onset_frame_indices": onset_frame_indices,
                 "a": a,
-                "s": s}
+                "s": s,
+                "r": r}
     
 
-    def get_signal(self, t0, onset_frame_indices, a, s, **kwargs):
+    def get_signal(self, t0, onset_frame_indices, a, s, r, **kwargs):
         """
         Synthesize one train example from the given arguments.
         
@@ -1148,6 +1155,8 @@ class KarplusStrongB(processors.Processor):
             a: Excitation amplitude factor,
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
             s: Decay stretching factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            r: Excitation dynamics filter coefficient scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
@@ -1183,12 +1192,14 @@ class KarplusStrongB(processors.Processor):
             a_in = a[:, :, frame_idx]
             s_in = s[:, :, frame_idx]
             self.Ha.set_coeff(s_in)
+            r_in = r[:, :, frame_idx]
+            self.Hd.set_coeff(r_in)
             
             # Synthesize one frame of audio with the (extended) Karplus-Strong
             # model.
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
-                x_e = a_in * self.excitation_block[..., offset + i]
+                x_e = a_in * self.Hd(self.excitation_block[..., offset + i])
                 f = self.hp(self.dl(last_y))
                 # Restrict feedback path for stability
                 f = self.maximum_feedback_factor * F.hardtanh(f, min_val=-1, max_val=1)

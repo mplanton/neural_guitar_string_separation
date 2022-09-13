@@ -121,6 +121,8 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
                torch.Tensor of shape [batch_size, n_strings, n_frames]
         s: Decay stretching factor scaled to [0, 1],
                torch.Tensor of shape [batch_size, n_strings, n_frames]
+        r: Excitation dynamics filter coefficient scaled to [0, 1],
+               torch.Tensor of shape [batch_size, n_strings, n_frames]
     """
     # onset_frame_indices: Note onset frame indices to trigger excitation
     #     signals. One index is [batch, string, onset_frame],
@@ -162,7 +164,15 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
     s = torch.linspace(s_min, s_max, n_sources)
     s = expand_constant(s, n_examples, batch_size, n_frames)
     
-    return f0_hz, onset_frame_indices, a, s
+    
+    #r: Excitation dynamics filter coefficient scaled to [0, 1],
+    #       torch.Tensor of shape [batch_size, n_strings, n_frames]
+    r_min = 1
+    r_max = 0
+    r = torch.linspace(r_min, r_max, n_sources)
+    r = expand_constant(r, n_examples, batch_size, n_frames)
+    
+    return f0_hz, onset_frame_indices, a, s, r
 
 
 class TestCore(unittest.TestCase):
@@ -307,8 +317,10 @@ class TestCore(unittest.TestCase):
         n_examples = 2
         batch_size = 2
         sr = 32000
-        #example_length = 2
-        example_length = 0.16 # sec
+        if save_output == True:
+            example_length = 2
+        else:
+            example_length = 0.16 # sec
         # Number of sources in the mix
         J = 6
         # The FFT hop size is the audio frame length
@@ -319,7 +331,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, onset_frame_indices, a, s = \
+        f0_hz, onset_frame_indices, a, s, r = \
             generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrongB(batch_size=batch_size,
@@ -339,11 +351,13 @@ class TestCore(unittest.TestCase):
             onset_frame_indices_in = onset_frame_indices[example]
             a_in = a[example]
             s_in = s[example]
+            r_in = r[example]
             
             controls = ks.get_controls(f0_in,
                                        onset_frame_indices_in,
                                        a_in,
-                                       s_in)
+                                       s_in,
+                                       r_in)
             sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
         
         # Save sources
@@ -368,7 +382,7 @@ class TestCore(unittest.TestCase):
         # Number of STFT time frames per train example
         N = int(M / fft_hop_size)
         
-        f0_hz, onset_frame_indices, a, s = \
+        f0_hz, onset_frame_indices, a, s, r = \
             generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
         
         ks = synths.KarplusStrongB(batch_size=batch_size,
@@ -385,6 +399,7 @@ class TestCore(unittest.TestCase):
             onset_frame_indices_in = onset_frame_indices[example]
             a_in = a[example]
             s_in = s[example]
+            r_in = r[example]
             
             #check_attributes_for_gradients(ks)
 
@@ -393,15 +408,20 @@ class TestCore(unittest.TestCase):
                 a_in.grad.zero_()
             if s_in.grad is not None:
                 s_in.grad.zero_()
+            if r_in.grad is not None:
+                r_in.grad.zero_()
             
             # Predicted controls from the neural network.
             a_in.requires_grad = True
             s_in.requires_grad = True
+            r_in.requires_grad = True
             
             sources = ks(f0_in,
                          onset_frame_indices_in,
                          a_in,
-                         s_in)
+                         s_in,
+                         r_in)
+            
             # Dummy cost function
             error = sources.sum()
             

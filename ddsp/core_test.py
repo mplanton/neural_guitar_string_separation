@@ -611,6 +611,67 @@ class TestCore(unittest.TestCase):
             # Dummy cost function
             error = y.sum()
             error.backward()
+    
+    def test_OnePole(self):
+        save_output=False
+        
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        r = 0.8
+        
+        filt = core.OnePole(batch_size, n_sources, r=r)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        
+        # White Noise input
+        x = torch.rand((batch_size, n_sources, sig_len)) * 2 - 1
+        
+        y = torch.zeros_like(x)
+        for i in range(sig_len):
+            x_in = x[..., i]
+            y[..., i] = filt(x_in)
+        
+        if save_output == True:
+            for batch in range(batch_size):
+                wavfile.write(f"test_OnePole_batch{batch}.wav",
+                              rate=sr,
+                              data=y[batch].T.numpy())
+
+    def test_OnePole_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        r = 0.3
+        
+        filt = core.OnePole(batch_size, n_sources, r)
+        r = torch.ones((batch_size, n_sources)) * r
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient (this is normally done with the optimizer)
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            if r.grad is not None:
+                r.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            r.requires_grad = True
+            filt.set_coeff(r)
+            
+            y = filt(x_in)
+
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
 
 if __name__ == '__main__':
     unittest.main()
@@ -628,3 +689,5 @@ if __name__ == '__main__':
     #test.test_HaOriginal_differentiability()
     #test.test_HaDecayStretch()
     #test.test_HaDecayStretch_differentiability()
+    #test.test_OnePole()
+    #test.test_OnePole_differentiability()

@@ -483,6 +483,7 @@ class KarplusStrongAutoencoderB(_Model):
         # Frame-wise control prediction
         self.a_linear = torch.nn.Linear(decoder_output_size, 1)
         self.s_linear = torch.nn.Linear(decoder_output_size, 1)
+        self.r_linear = torch.nn.Linear(decoder_output_size, 1)
         
         # synth
         upsampling_factor = physical_modeling_sample_rate / sample_rate
@@ -595,17 +596,24 @@ class KarplusStrongAutoencoderB(_Model):
         a = a.squeeze(-1)
         a = torch.reshape(a, (batch_size, n_sources, n_frames))
         
-        # rho prediction
+        # s prediction
         x_s = self.s_linear(x)
         s = core.exp_sigmoid(x_s)
         s = s.squeeze(-1)
         s = torch.reshape(s, (batch_size, n_sources, n_frames))
+        
+        # r prediction
+        x_r = self.r_linear(x)
+        r = core.exp_sigmoid(x_r)
+        r = r.squeeze(-1)
+        r = torch.reshape(r, (batch_size, n_sources, n_frames))
 
         # Apply the synthesis model.
         pm_sources = self.ks_synth(f0_hz=f0_hz,
                                    onset_frame_indices=onset_frame_indices,
                                    a=a,
-                                   s=s)
+                                   s=s,
+                                   r=r)
         if self.sample_rate != self.physical_modeling_sample_rate:
             # Resample
             sources = self.resampler(pm_sources)
@@ -616,7 +624,8 @@ class KarplusStrongAutoencoderB(_Model):
             'f0_hz': f0_hz.detach(),
             'onset_frame_indices': onset_frame_indices.detach(),
             'a': a.detach(),
-            's': s.detach()
+            's': s.detach(),
+            'r': r.detach()
         }
 
         if self.return_sources and (self.return_synth_controls or return_synth_controls):
