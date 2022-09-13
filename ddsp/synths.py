@@ -1134,6 +1134,7 @@ class KarplusStrongB(processors.Processor):
         # Scale parameters
         a = self.maximum_excitation_amplitude * a
         s = 0.1 + 0.9 * s
+        r = r * 0.95 # for stability
         
         return {"t0": t0,
                 "onset_frame_indices": onset_frame_indices,
@@ -1156,7 +1157,7 @@ class KarplusStrongB(processors.Processor):
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
             s: Decay stretching factor scaled to [0, 1],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
-            r: Excitation dynamics filter coefficient scaled to [0, 1],
+            r: Excitation dynamics filter coefficient scaled to [0, r_max],
                    torch.Tensor of shape [batch_size, n_strings, n_frames]
         
         Returns:
@@ -1200,9 +1201,9 @@ class KarplusStrongB(processors.Processor):
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
                 x_e = a_in * self.Hd(self.excitation_block[..., offset + i])
-                f = self.hp(self.dl(last_y))
-                # Restrict feedback path for stability
-                f = self.maximum_feedback_factor * F.hardtanh(f, min_val=-1, max_val=1)
+                f = self.maximum_feedback_factor * self.hp(self.dl(last_y))
+                # Restrict feedback path for stability.
+                f = F.hardtanh(f, min_val=-1, max_val=1)
                 y[..., offset + i] = self.Ha(x_e + f)
                 last_y = y[..., offset + i]
         return y
