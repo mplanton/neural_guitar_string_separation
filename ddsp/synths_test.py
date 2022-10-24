@@ -129,7 +129,7 @@ def generateParametersB(frame_rate, batch_size, n_examples, example_length, n_fr
     #     torch.tensor of shape [n_examples, n_onset_indices, 3]
     
     # Make onsets for one example at every quarter second.
-    f_onsets = 4 # Hz
+    f_onsets = 10 # Hz
     onset_times = torch.arange(0, example_length, 1 / f_onsets)
     onset_frames = (onset_times * frame_rate).type(torch.int) # [n_onset_indices]
     
@@ -310,7 +310,7 @@ class TestCore(unittest.TestCase):
             ks.detach()
 
 
-    def test_KSB_synthetic_input(self):
+    def test_KSC_synthetic_input(self):
         save_output=False
         
         excitation_length = 0.005
@@ -334,7 +334,7 @@ class TestCore(unittest.TestCase):
         f0_hz, onset_frame_indices, a, s, r = \
             generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
         
-        ks = synths.KarplusStrongB(batch_size=batch_size,
+        ks = synths.KarplusStrongC(batch_size=batch_size,
                                   n_samples=M,
                                   sample_rate=sr,
                                   audio_frame_size=fft_hop_size,
@@ -363,10 +363,10 @@ class TestCore(unittest.TestCase):
         # Save sources
         if save_output == True:
             for batch in range(batch_size):
-                wavfile.write(f"KSBsynth_sources_batch{batch}.wav", sr,
+                wavfile.write(f"KSCsynth_sources_batch{batch}.wav", sr,
                               sources[batch].T.numpy())
 
-    def test_KSB_differentiability(self):
+    def test_KSC_differentiability(self):
         excitation_length=0.005
         n_examples = 2
         batch_size = 2
@@ -385,7 +385,7 @@ class TestCore(unittest.TestCase):
         f0_hz, onset_frame_indices, a, s, r = \
             generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
         
-        ks = synths.KarplusStrongB(batch_size=batch_size,
+        ks = synths.KarplusStrongC(batch_size=batch_size,
                                   n_samples=M,
                                   sample_rate=sr,
                                   audio_frame_size=fft_hop_size,
@@ -438,5 +438,6 @@ if __name__ == "__main__":
     
     #test.test_KS_synthetic_input()
     #test.test_KS_differentiability()
-    #test.test_KSB_synthetic_input()
-    #test.test_KSB_differentiability()
+    #test.test_KSC_synthetic_input()
+    #test.test_KSC_differentiability()
+    
