@@ -1212,7 +1212,7 @@ class KarplusStrongB(processors.Processor):
 class KarplusStrongC(processors.Processor):
     """
     Karplus-Strong string model with original filters and extensions.
-    This synth is used in the 'C' experiments.
+    This synth is used in the 'C' experiment.
     
     Args:
         batch_size: int, batch size of the model
@@ -1429,6 +1429,176 @@ class KarplusStrongC(processors.Processor):
             offset = frame_idx * self.audio_frame_size
             for i in range(self.audio_frame_size):
                 x_e = a_in * self.Hd(self.excitation_block[..., offset + i])
+                f = self.maximum_feedback_factor * self.hp(self.dl(last_y))
+                # Restrict feedback path for stability.
+                f = F.hardtanh(f, min_val=-1, max_val=1)
+                y[..., offset + i] = self.Ha(x_e + f)
+                last_y = y[..., offset + i]
+        return y
+
+
+class KarplusStrongC2(processors.Processor):
+    """
+    Karplus-Strong string model with original filters and extensions.
+    This synth is used in the 'C2' experiment.
+    
+    Args:
+        batch_size: int, batch size of the model
+        n_samples: int, number of time samples per training example
+        sample_rate: int, sample rate in Hertz
+        audio_frame_size: int, number of time samples in one (STFT) audio frame
+        n_strings: int, number of strings
+        min_freq: minimum frequency that can be synthesized
+        excitation_length: Length of the excitation signal in seconds
+        maximum_excitation_amplitude: Maximum amplitude value of the excitation signal
+        maximum_feedback_factor: The maximum value of the loop feedback factor
+    """
+    def __init__(self,
+                 batch_size=4,
+                 n_samples=64000,
+                 sample_rate=16000,
+                 audio_frame_size=256,
+                 n_strings=6,
+                 min_freq=20,
+                 excitation_length=0.005,
+                 maximum_excitation_amplitude=0.99,
+                 maximum_feedback_factor=0.99):
+        assert n_samples % audio_frame_size == 0.0, \
+            f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
+        
+        super().__init__()
+        self.batch_size = batch_size
+        self.n_samples = n_samples
+        self.sample_rate = sample_rate
+        self.audio_frame_size = audio_frame_size
+        self.n_strings = n_strings
+        self.min_freq = min_freq
+        self.maximum_excitation_amplitude = maximum_excitation_amplitude
+        self.maximum_feedback_factor = maximum_feedback_factor
+        
+        # Delay line
+        self.max_delay = 1 / min_freq
+        self.dl = core.DelayLine(batch_size=batch_size,
+                                 n_delays=n_strings,
+                                 length=self.max_delay,
+                                 sr=sample_rate)
+        
+        # Loop lowpass filter
+        self.Ha = core.HaDecayStretch(batch_size=batch_size, n_filters=n_strings)
+        
+        # Excitation dynamics filter
+        self.Hd = core.OnePole(batch_size=batch_size, n_filters=n_strings, r=0.5)
+        
+        # DC blocking loop highpass filter with fc = 20Hz to avoid
+        # low frequency ringing.
+        self.hp = core.SimpleHighpass(batch_size=batch_size,
+                                      n_filters=n_strings,
+                                      sr=sample_rate)
+        hp_fc = 20
+        self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
+        
+        # Plain white noise as excitation input (x_n[n])
+        self.excitation_block = torch.rand((self.batch_size, self.n_strings,
+                                            self.n_samples)) * 2 - 1
+        
+        self.last_valid_f0 = torch.ones((batch_size, n_strings)) * min_freq
+    
+    def detach(self):
+        """
+        Detach the internal state of the synth from the current graph.
+        """
+        # DDSP objects
+        self.dl.detach()
+        self.Ha.detach()
+        self.Hd.detach()
+        self.hp.detach()
+        
+        # Pytorch tensors
+        self.excitation_block = self.excitation_block.detach()
+
+
+    def get_controls(self, f0_hz, a, s, r):
+        """
+        Convert network output tensors into a dictionary of synthesizer controls.
+        Args:
+            f0_hz: Fundamental frequencies in Hertz,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            a: Excitation amplitude factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            s: Decay stretching factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            r: Excitation dynamics filter coefficient scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+        """
+        n_frames = f0_hz.shape[2]
+        
+        # If note is off, stay at last valid fundamental frequency.
+        for batch in range(self.batch_size):
+            for string in range(self.n_strings):
+                for frame in range(n_frames):
+                    if f0_hz[batch, string, frame] == 0:
+                        f0_hz[batch, string, frame] = self.last_valid_f0[batch, string]
+                    else:
+                        self.last_valid_f0[batch, string] = f0_hz[batch, string, frame]
+        
+        # Fundamental periods
+        t0 = core.safe_divide(1, f0_hz)
+        # Limit fundamental period to maximum delay
+        t0 [t0 > self.max_delay] = self.max_delay
+        
+        # Scale parameters
+        a = self.maximum_excitation_amplitude * a
+        s = 0.1 + 0.9 * s
+        r = r * 0.95 # for stability
+        
+        return {"t0": t0,
+                "a": a,
+                "s": s,
+                "r": r}
+    
+
+    def get_signal(self, t0, a, s, r, **kwargs):
+        """
+        Synthesize one train example from the given arguments.
+        
+        Args:
+            t0: Fundamental periods of the played notes in seconds,
+                 torch.Tensor of shape [batch_size, n_strings, n_frames]
+            a: Excitation amplitude factor,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames, n_samples]
+            s: Decay stretching factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            r: Excitation dynamics filter coefficient scaled to [0, r_max],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+        
+        Returns:
+            The synthesized example of string sounds from the given parameters,
+            torch.tensor of shape [batch_size, n_strings, n_samples]
+        """
+        # Build excitations for the training example.
+        self.excitation_block = torch.rand((self.batch_size, self.n_strings,
+                                            self.n_samples)) * 2 - 1
+        
+        # Synthesize audio for every frame
+        y = torch.zeros_like(self.excitation_block)
+        f = torch.zeros((self.batch_size, self.n_strings))
+        last_y = torch.zeros((self.batch_size, self.n_strings))
+        n_frames = t0.shape[2]
+        for frame_idx in range(n_frames):
+            # Set t0 and predicted parameters
+            t0_in = t0[:, :, frame_idx]
+            self.dl.set_delay(t0_in)
+            a_in = a[:, :, frame_idx]
+            s_in = s[:, :, frame_idx]
+            self.Ha.set_coeff(s_in)
+            r_in = r[:, :, frame_idx]
+            self.Hd.set_coeff(r_in)
+            
+            # Synthesize one frame of audio with the (extended) Karplus-Strong
+            # model.
+            offset = frame_idx * self.audio_frame_size
+            for i in range(self.audio_frame_size):
+                x_e = self.Hd(a_in[..., i] * self.excitation_block[..., offset + i])
                 f = self.maximum_feedback_factor * self.hp(self.dl(last_y))
                 # Restrict feedback path for stability.
                 f = F.hardtanh(f, min_val=-1, max_val=1)

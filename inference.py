@@ -102,7 +102,7 @@ source_estimates_masking_slices = []
 
 # Synth controls
 f0_hz = []
-onset_frame_indices = []
+#onset_frame_indices = []
 a = []
 s = []
 r = []
@@ -117,7 +117,7 @@ for mix_slice, freqs_slice, sources_slice in pbar:
             trained_model(mix_slice, freqs_slice, return_synth_controls=True)
     #print("DBG: fc:", fc)
     f0_hz.append(ctl['f0_hz'])
-    onset_frame_indices.append(ctl['onset_frame_indices'])
+    #onset_frame_indices.append(ctl['onset_frame_indices'])
     a.append(ctl['a'])
     s.append(ctl['s'])
     r.append(ctl['r'])
@@ -136,7 +136,7 @@ source_estimates_masking = torch.cat(source_estimates_masking_slices, dim=-1).nu
 target_sources = torch.cat(target_sources_slices, dim=-1).numpy()
 
 f0_hz = torch.cat(f0_hz, dim=-1).numpy()
-global_onset_frame_indices = convert_onsets_to_global_inexing(onset_frame_indices, batch_size, n_sources)
+#global_onset_frame_indices = convert_onsets_to_global_inexing(onset_frame_indices, batch_size, n_sources)
 a = torch.cat(a, dim=-1).numpy()
 s = torch.cat(s, dim=-1).numpy()
 r = torch.cat(r, dim=-1).numpy()
@@ -158,7 +158,7 @@ for batch in range(batch_size):
                   data=target_sources[batch].T)
 
 np.save(out_path + "/f0_hz.npy", f0_hz) # [batch_size, n_sources, n_frames]
-np.save(out_path + "/onset_frame_indices.npy", global_onset_frame_indices) # [n_onsets, 3]
+#np.save(out_path + "/onset_frame_indices.npy", global_onset_frame_indices) # [n_onsets, 3]
 np.save(out_path + "/a.npy", a) # [batch_size, n_sources, n_frames]
 np.save(out_path + "/s.npy", s) # [batch_size, n_sources, n_frames]
 np.save(out_path + "/r.npy", r) # [batch_size, n_sources, n_frames]
