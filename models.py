@@ -1006,7 +1006,7 @@ class KarplusStrongAutoencoderC2(_Model):
         a = a.squeeze(-1)
         a = torch.reshape(a, (batch_size, n_sources, n_frames, self.hop_size//4)) # [batch_size, n_sources, n_frames, n_samples//4]
         # Upsample a to physical modeling sampling rate
-        a = self.upsampler(a)
+        a_upsampled = self.upsampler(a)
         
         # s prediction
         x_s = self.s_linear(x)
@@ -1022,7 +1022,7 @@ class KarplusStrongAutoencoderC2(_Model):
 
         # Apply the synthesis model.
         pm_sources = self.ks_synth(f0_hz=f0_hz,
-                                   a=a,
+                                   a=a_upsampled,
                                    s=s,
                                    r=r)
         # Resample

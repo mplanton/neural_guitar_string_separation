@@ -137,7 +137,7 @@ target_sources = torch.cat(target_sources_slices, dim=-1).numpy()
 
 f0_hz = torch.cat(f0_hz, dim=-1).numpy()
 #global_onset_frame_indices = convert_onsets_to_global_inexing(onset_frame_indices, batch_size, n_sources)
-a = torch.cat(a, dim=-1).numpy()
+a = torch.cat(a, dim=-2).numpy()
 s = torch.cat(s, dim=-1).numpy()
 r = torch.cat(r, dim=-1).numpy()
 
@@ -159,7 +159,7 @@ for batch in range(batch_size):
 
 np.save(out_path + "/f0_hz.npy", f0_hz) # [batch_size, n_sources, n_frames]
 #np.save(out_path + "/onset_frame_indices.npy", global_onset_frame_indices) # [n_onsets, 3]
-np.save(out_path + "/a.npy", a) # [batch_size, n_sources, n_frames]
+np.save(out_path + "/a.npy", a) # [batch_size, n_sources, n_frames, n_samples]
 np.save(out_path + "/s.npy", s) # [batch_size, n_sources, n_frames]
 np.save(out_path + "/r.npy", r) # [batch_size, n_sources, n_frames]
 
