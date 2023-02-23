@@ -1,0 +1,75 @@
+# ----- GENERAL PARAMETERS ---------------------------
+
+tag: KarplusStrongD_ex2
+comment: Experiment D2: ExD1 extended with excitation amplitude a.
+architecture: KarplusStrongAutoencoderD2
+
+
+# -------- DATASET PARAMETERS -----------------------
+
+dataset = Guitarset
+n-files-per-style-genre = 6 # from 36 -> Reduced training set
+valid-split = 0.34
+style = comp # from comp, solo or all
+genres = [bn] # from [bn, funk, jazz, rock, ss]
+allowed-strings = [1, 2, 3, 4, 5, 6] # from [1, 2, 3, 4, 5, 6]
+
+# The example length must be a multiple of the CREPE hop size of 256.
+example-length = 5120   # 20 * 256
+
+f0-cuesta = False        # Use CREPE pitch tracks
+normalize-mix = True
+normalize-sources = False
+
+# -------- TRAINING PARAMETERS -----------------------
+
+epochs = 2               # 2 epochs for standard model comparison
+batch-size = 2
+shuffle-songs = True     # Shuffle the song sequence for every epoch.
+
+lr = 0.0001
+patience = 5             # Early stopping patience
+lr-decay-patience = 80
+lr-decay-gamma = 0.98
+weight-decay = 0.00001
+seed = 4
+nb-workers = 1           # Keep this below 2 since parallel loading is not supported yet.
+quiet = False
+no-cuda = False
+
+supervised = False
+reconstruction-loss-weight = 1
+loss-nfft = [2048, 1024, 512, 256, 128, 64]
+loss-mag-weight = 1
+loss-logmag-weight = 1
+loss-logmel-weight = 0
+loss-delta-freq-weight = 0
+loss-delta-time-weight = 0
+loss-lsf-weight = 0  # LSF regularization loss
+
+
+# -------- MODEL PARAMETERS ------------------------
+
+# This Influences the range of s, and influences the PM example-length,
+# which must be a multiple of the PM frame size.
+# It is easy to take a multiple of the system sample rate of 16kHz.
+physical-modeling-sample-rate = 32000
+
+
+# Input signal FFT analysis parameters
+nfft = 512
+nhop = 256
+
+# Choose these values carefully for stability.
+# Both of them should be smaller than 1.
+maximum-excitation-amplitude = 0.999
+maximum-feedback-factor = 0.999
+
+encoder = MixEncoderSimple
+
+encoder-hidden-size = 256
+embedding-size = 128
+decoder-hidden-size = 512
+decoder-output-size = 512
+unidirectional = True
+

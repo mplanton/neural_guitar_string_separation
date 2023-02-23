@@ -1212,7 +1212,7 @@ class KarplusStrongB(processors.Processor):
 class KarplusStrongC(processors.Processor):
     """
     Karplus-Strong string model with original filters and extensions.
-    This synth is used in the 'C' experiment.
+    This synth is used in the 'C1' experiment.
     
     Args:
         batch_size: int, batch size of the model
@@ -1602,6 +1602,369 @@ class KarplusStrongC2(processors.Processor):
                 f = self.maximum_feedback_factor * self.hp(self.dl(last_y))
                 # Restrict feedback path for stability.
                 f = F.hardtanh(f, min_val=-1, max_val=1)
+                y[..., offset + i] = self.Ha(x_e + f)
+                last_y = y[..., offset + i]
+        return y
+
+class KarplusStrongD1(processors.Processor):
+    """
+    Karplus-Strong string model with original filters and extensions.
+    This synth is used in the 'D1' experiment.
+    
+    Args:
+        batch_size: int, batch size of the model
+        n_samples: int, number of time samples per training example
+        sample_rate: int, sample rate in Hertz
+        audio_frame_size: int, number of time samples in one (STFT) audio frame
+        n_strings: int, number of strings
+        min_freq: minimum frequency that can be synthesized
+        excitation_length: Length of the excitation signal in seconds
+        maximum_excitation_amplitude: Maximum amplitude value of the excitation signal
+        maximum_feedback_factor: The maximum value of the loop feedback factor
+    """
+    def __init__(self,
+                 batch_size=4,
+                 n_samples=64000,
+                 sample_rate=16000,
+                 audio_frame_size=256,
+                 n_strings=6,
+                 min_freq=20,
+                 excitation_length=0.005,
+                 maximum_excitation_amplitude=0.999,
+                 maximum_feedback_factor=0.999):
+        assert n_samples % audio_frame_size == 0.0, \
+            f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
+        
+        super().__init__()
+        self.batch_size = batch_size
+        self.n_samples = n_samples
+        self.sample_rate = sample_rate
+        self.audio_frame_size = audio_frame_size
+        self.n_strings = n_strings
+        self.min_freq = min_freq
+        self.maximum_excitation_amplitude = maximum_excitation_amplitude
+        self.maximum_feedback_factor = maximum_feedback_factor
+        
+        # Delay line
+        self.max_delay = 1 / min_freq
+        self.dl = core.DelayLine(batch_size=batch_size,
+                                 n_delays=n_strings,
+                                 length=self.max_delay,
+                                 sr=sample_rate)
+        
+        # Loop lowpass filter
+        self.Ha = core.HaDecayStretch(batch_size=batch_size, n_filters=n_strings)
+        
+        # DC blocking loop highpass filter with fc = 20Hz to avoid
+        # low frequency ringing.
+        self.hp = core.SimpleHighpass(batch_size=batch_size,
+                                      n_filters=n_strings,
+                                      sr=sample_rate)
+        hp_fc = 20
+        self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
+        
+        # White noise burst excitation signal
+        self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
+        self.excitation = torch.rand(self.n_excitation_samples) * 2 - 1
+        
+        self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
+                                        self.n_samples + self.n_excitation_samples))
+        # An excitation signal may reach into the next train example.
+        self.last_excitation_overhead = torch.zeros(batch_size,
+                                                    n_strings,
+                                                    self.n_excitation_samples)
+        
+        self.last_valid_f0 = torch.ones((batch_size, n_strings)) * min_freq
+        
+        self.last_t0_frame_slice = torch.zeros((batch_size, n_strings))
+    
+    def detach(self):
+        """
+        Detach the internal state of the synth from the current graph.
+        """
+        # DDSP objects
+        self.dl.detach()
+        self.Ha.detach()
+        self.hp.detach()
+        
+        # Pytorch tensors
+        self.excitation_block = self.excitation_block.detach()
+        self.last_excitation_overhead = self.last_excitation_overhead.detach()
+
+    def get_controls(self, f0_hz, onset_frame_indices, b):
+        """
+        Convert network output tensors into a dictionary of synthesizer controls.
+        Args:
+            f0_hz: Fundamental frequencies in Hertz,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            onset_frame_indices: Note onset frame indices to trigger excitation
+                   signals. One index is [batch, string, onset_frame],
+                   torch.tensor of shape [n_onset_indices, 3]
+            b: Decay stretching factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+        """
+        n_frames = f0_hz.shape[2]
+        
+        # If note is off, stay at last valid fundamental frequency.
+        for batch in range(self.batch_size):
+            for string in range(self.n_strings):
+                for frame in range(n_frames):
+                    if f0_hz[batch, string, frame] == 0:
+                        f0_hz[batch, string, frame] = self.last_valid_f0[batch, string]
+                    else:
+                        self.last_valid_f0[batch, string] = f0_hz[batch, string, frame]
+        
+        # Fundamental periods
+        t0 = core.safe_divide(1, f0_hz)
+        # Limit fundamental period to maximum delay
+        t0 [t0 > self.max_delay] = self.max_delay
+        
+        # Scale parameters
+        b = 0.001 + 0.998 * b # scaled for stability
+        
+        return {"t0": t0,
+                "onset_frame_indices": onset_frame_indices,
+                "b": b}
+
+    def get_signal(self, t0, onset_frame_indices, b, **kwargs):
+        """
+        Synthesize one train example from the given arguments.
+        
+        Args:
+            t0: Fundamental periods of the played notes in seconds,
+                 torch.Tensor of shape [batch_size, n_strings, n_frames]
+            onset_frame_indices: Note onset frame indices to trigger excitation
+                 signals. One index is [batch, string, onset_frame],
+                 torch.tensor of shape [n_onset_indices, 3]
+            b: Excitation amplitude factor scaled for stability,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+        
+        Returns:
+            The synthesized example of string sounds from the given parameters,
+            torch.tensor of shape [batch_size, n_strings, n_samples]
+        """
+        # Build excitations for the training example.
+        self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
+                                        self.n_samples + self.n_excitation_samples))
+        for n, onset_index in enumerate(onset_frame_indices):
+            batch = onset_index[0].item()
+            string = onset_index[1].item()
+            # Convert from frame rate to audio rate.
+            start = onset_index[2].item() * self.audio_frame_size
+            stop = start + self.n_excitation_samples
+            self.excitation_block[batch, string, start : stop] = self.excitation
+        
+        # Store excitation overhead for next example and resize the
+        # excitation block to the correct length.
+        self.excitation_block[..., :self.n_excitation_samples] += self.last_excitation_overhead
+        self.last_excitation_overhead = self.excitation_block[..., -self.n_excitation_samples:]
+        self.excitation_block = self.excitation_block[..., : -self.n_excitation_samples]
+        
+        # Synthesize audio for every frame
+        y = torch.zeros_like(self.excitation_block)
+        f = torch.zeros((self.batch_size, self.n_strings))
+        last_y = torch.zeros((self.batch_size, self.n_strings))
+        n_frames = t0.shape[2]
+        for frame_idx in range(n_frames):
+            # Set t0 and predicted parameters
+            t0_in = t0[:, :, frame_idx]
+            self.dl.set_delay(t0_in)
+            b_in = b[:, :, frame_idx]
+            self.Ha.set_coeff(b_in)
+            
+            # Synthesize one frame of audio with the (extended) Karplus-Strong
+            # model.
+            offset = frame_idx * self.audio_frame_size
+            for i in range(self.audio_frame_size):
+                x_e = self.maximum_excitation_amplitude * self.excitation_block[..., offset + i]
+                f = self.hp(self.dl(last_y))
+                # Restrict feedback path for stability.
+                f = self.maximum_feedback_factor * F.hardtanh(f, min_val=-1, max_val=1)
+                y[..., offset + i] = self.Ha(x_e + f)
+                last_y = y[..., offset + i]
+        return y
+
+class KarplusStrongD2(processors.Processor):
+    """
+    Karplus-Strong string model with original filters and extensions.
+    This synth is used in the 'D2' experiment.
+    
+    Args:
+        batch_size: int, batch size of the model
+        n_samples: int, number of time samples per training example
+        sample_rate: int, sample rate in Hertz
+        audio_frame_size: int, number of time samples in one (STFT) audio frame
+        n_strings: int, number of strings
+        min_freq: minimum frequency that can be synthesized
+        excitation_length: Length of the excitation signal in seconds
+        maximum_excitation_amplitude: Maximum amplitude value of the excitation signal
+        maximum_feedback_factor: The maximum value of the loop feedback factor
+    """
+    def __init__(self,
+                 batch_size=4,
+                 n_samples=64000,
+                 sample_rate=16000,
+                 audio_frame_size=256,
+                 n_strings=6,
+                 min_freq=20,
+                 excitation_length=0.005,
+                 maximum_excitation_amplitude=0.999,
+                 maximum_feedback_factor=0.999):
+        assert n_samples % audio_frame_size == 0.0, \
+            f"The n_samples must be a multiple of audio_frame_size!\nBut n_samples is {n_samples} and audio_frame_size is {audio_frame_size}."
+        
+        super().__init__()
+        self.batch_size = batch_size
+        self.n_samples = n_samples
+        self.sample_rate = sample_rate
+        self.audio_frame_size = audio_frame_size
+        self.n_strings = n_strings
+        self.min_freq = min_freq
+        self.maximum_excitation_amplitude = maximum_excitation_amplitude
+        self.maximum_feedback_factor = maximum_feedback_factor
+        
+        # Delay line
+        self.max_delay = 1 / min_freq
+        self.dl = core.DelayLine(batch_size=batch_size,
+                                 n_delays=n_strings,
+                                 length=self.max_delay,
+                                 sr=sample_rate)
+        
+        # Loop lowpass filter
+        self.Ha = core.HaDecayStretch(batch_size=batch_size, n_filters=n_strings)
+        
+        # DC blocking loop highpass filter with fc = 20Hz to avoid
+        # low frequency ringing.
+        self.hp = core.SimpleHighpass(batch_size=batch_size,
+                                      n_filters=n_strings,
+                                      sr=sample_rate)
+        hp_fc = 20
+        self.hp.set_fc(hp_fc * torch.ones((batch_size, n_strings)))
+        
+        # White noise burst excitation signal
+        self.n_excitation_samples = math.ceil(excitation_length * sample_rate)
+        self.excitation = torch.rand(self.n_excitation_samples) * 2 - 1
+        
+        self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
+                                        self.n_samples + self.n_excitation_samples))
+        # An excitation signal may reach into the next train example.
+        self.last_excitation_overhead = torch.zeros(batch_size,
+                                                    n_strings,
+                                                    self.n_excitation_samples)
+        
+        self.last_valid_f0 = torch.ones((batch_size, n_strings)) * min_freq
+        
+        self.last_t0_frame_slice = torch.zeros((batch_size, n_strings))
+    
+    def detach(self):
+        """
+        Detach the internal state of the synth from the current graph.
+        """
+        # DDSP objects
+        self.dl.detach()
+        self.Ha.detach()
+        self.hp.detach()
+        
+        # Pytorch tensors
+        self.excitation_block = self.excitation_block.detach()
+        self.last_excitation_overhead = self.last_excitation_overhead.detach()
+
+    def get_controls(self, f0_hz, onset_frame_indices, b, a):
+        """
+        Convert network output tensors into a dictionary of synthesizer controls.
+        Args:
+            f0_hz: Fundamental frequencies in Hertz,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            onset_frame_indices: Note onset frame indices to trigger excitation
+                   signals. One index is [batch, string, onset_frame],
+                   torch.tensor of shape [n_onset_indices, 3]
+            b: Decay stretching factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            a: Excitation amplitude factor scaled to [0, 1],
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+        """
+        n_frames = f0_hz.shape[2]
+        
+        # If note is off, stay at last valid fundamental frequency.
+        for batch in range(self.batch_size):
+            for string in range(self.n_strings):
+                for frame in range(n_frames):
+                    if f0_hz[batch, string, frame] == 0:
+                        f0_hz[batch, string, frame] = self.last_valid_f0[batch, string]
+                    else:
+                        self.last_valid_f0[batch, string] = f0_hz[batch, string, frame]
+        
+        # Fundamental periods
+        t0 = core.safe_divide(1, f0_hz)
+        # Limit fundamental period to maximum delay
+        t0 [t0 > self.max_delay] = self.max_delay
+        
+        # Scale parameters
+        b = 0.001 + 0.998 * b # scaled for stability
+        a = self.maximum_excitation_amplitude * a
+        
+        return {"t0": t0,
+                "onset_frame_indices": onset_frame_indices,
+                "b": b,
+                "a": a}
+
+    def get_signal(self, t0, onset_frame_indices, b, a, **kwargs):
+        """
+        Synthesize one train example from the given arguments.
+        
+        Args:
+            t0: Fundamental periods of the played notes in seconds,
+                 torch.Tensor of shape [batch_size, n_strings, n_frames]
+            onset_frame_indices: Note onset frame indices to trigger excitation
+                 signals. One index is [batch, string, onset_frame],
+                 torch.tensor of shape [n_onset_indices, 3]
+            b: Excitation amplitude factor scaled for stability,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+            a: Excitation amplitude factor scaled for stability,
+                   torch.Tensor of shape [batch_size, n_strings, n_frames]
+        
+        Returns:
+            The synthesized example of string sounds from the given parameters,
+            torch.tensor of shape [batch_size, n_strings, n_samples]
+        """
+        # Build excitations for the training example.
+        self.excitation_block = torch.zeros((self.batch_size, self.n_strings,
+                                        self.n_samples + self.n_excitation_samples))
+        for n, onset_index in enumerate(onset_frame_indices):
+            batch = onset_index[0].item()
+            string = onset_index[1].item()
+            # Convert from frame rate to audio rate.
+            start = onset_index[2].item() * self.audio_frame_size
+            stop = start + self.n_excitation_samples
+            self.excitation_block[batch, string, start : stop] = self.excitation
+        
+        # Store excitation overhead for next example and resize the
+        # excitation block to the correct length.
+        self.excitation_block[..., :self.n_excitation_samples] += self.last_excitation_overhead
+        self.last_excitation_overhead = self.excitation_block[..., -self.n_excitation_samples:]
+        self.excitation_block = self.excitation_block[..., : -self.n_excitation_samples]
+        
+        # Synthesize audio for every frame
+        y = torch.zeros_like(self.excitation_block)
+        f = torch.zeros((self.batch_size, self.n_strings))
+        last_y = torch.zeros((self.batch_size, self.n_strings))
+        n_frames = t0.shape[2]
+        for frame_idx in range(n_frames):
+            # Set t0 and predicted parameters
+            t0_in = t0[:, :, frame_idx]
+            self.dl.set_delay(t0_in)
+            b_in = b[:, :, frame_idx]
+            self.Ha.set_coeff(b_in)
+            a_in = a[:, :, frame_idx]
+            
+            # Synthesize one frame of audio with the (extended) Karplus-Strong
+            # model.
+            offset = frame_idx * self.audio_frame_size
+            for i in range(self.audio_frame_size):
+                x_e = a_in * self.excitation_block[..., offset + i]
+                f = self.hp(self.dl(last_y))
+                # Restrict feedback path for stability.
+                f = self.maximum_feedback_factor * F.hardtanh(f, min_val=-1, max_val=1)
                 y[..., offset + i] = self.Ha(x_e + f)
                 last_y = y[..., offset + i]
         return y

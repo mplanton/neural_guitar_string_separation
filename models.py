@@ -1053,6 +1053,413 @@ class KarplusStrongAutoencoderC2(_Model):
         self.ks_synth.detach()
 
 
+class KarplusStrongAutoencoderD1(_Model):
+    """
+    Autoencoder that encodes a mixture of n voices into synthesis parameters
+    from which the mixture is re-synthesised. Synthesis of each voice is done
+    with a Karplus-Strong model.
+    
+    This model is used in the 'C' experiment.
+    """
+
+    def __init__(self,
+                 batch_size,
+                 allowed_strings=[1, 2, 3, 4, 5, 6],
+                 sample_rate=16000,
+                 physical_modeling_sample_rate=32000,
+                 example_length=64000,
+                 fft_size=512,
+                 hop_size=256,
+                 encoder_hidden_size=256,
+                 embedding_size=128,
+                 decoder_hidden_size=512,
+                 decoder_output_size=512,
+                 bidirectional=False,
+                 return_sources=False,
+                 return_synth_controls=False,
+                 maximum_excitation_amplitude=0.99,
+                 maximum_feedback_factor=0.99):
+        super().__init__()
+
+        # attributes
+        self.batch_size = batch_size
+        self.allowed_strings = allowed_strings
+        self.sample_rate = sample_rate
+        self.physical_modeling_sample_rate = physical_modeling_sample_rate
+        self.fft_size = fft_size
+        self.hop_size = hop_size
+        self.return_sources = return_sources
+        self.return_synth_controls = return_synth_controls
+
+        overlap = hop_size / fft_size
+
+        # -> Latent mixture representation
+        self.encoder = nc.MixEncoderSimple(fft_size=fft_size,
+                                           overlap=overlap,
+                                           hidden_size=encoder_hidden_size,
+                                           embedding_size=embedding_size,
+                                           n_sources=len(allowed_strings),
+                                           bidirectional=bidirectional)
+
+        # -> Latent source representations
+        self.decoder = nc.SynthParameterDecoderSimple(z_size=embedding_size,
+                                            hidden_size=decoder_hidden_size,
+                                            output_size=decoder_output_size,
+                                            bidirectional=bidirectional)
+        
+        # Frame-wise control prediction
+        self.b_linear = torch.nn.Linear(decoder_output_size, 1)
+        
+        # synth
+        upsampling_factor = physical_modeling_sample_rate / sample_rate
+        pm_example_length = int(example_length * upsampling_factor)
+        pm_hop_size = int(hop_size * upsampling_factor)
+        self.ks_synth = synths.KarplusStrongD1(batch_size=batch_size,
+                                            n_samples=pm_example_length,
+                                            sample_rate=physical_modeling_sample_rate,
+                                            audio_frame_size=pm_hop_size,
+                                            n_strings=len(allowed_strings),
+                                            min_freq=20,
+                                            excitation_length=0.005,
+                                            maximum_excitation_amplitude=maximum_excitation_amplitude,
+                                            maximum_feedback_factor=maximum_feedback_factor)
+        
+        # Resampler to resample physical modeling output to system sample rate.
+        self.resampler = torchaudio.transforms.Resample(orig_freq=physical_modeling_sample_rate,
+                            new_freq=sample_rate)
+
+    @classmethod
+    def from_config(cls, config: dict):
+        # Load parameters from config file.
+        keys = config.keys()
+        batch_size = config['batch_size'] if 'batch_size' in keys else 1
+        allowed_strings = config['allowed_strings'] if 'allowed_strings' in keys else [1, 2, 3, 4, 5, 6]
+        sample_rate = config['sample_rate'] if 'sample_rate' in keys else 16000
+        physical_modeling_sample_rate = config['physical_modeling_sample_rate'] if 'physical_modeling_sample_rate' in keys else sample_rate
+        example_length = config['example_length'] if 'example_length' in keys else 64000
+        encoder_hidden_size = config['encoder_hidden_size'] if 'encoder_hidden_size' in keys else 256
+        embedding_size = config['embedding_size'] if 'embedding_size' in keys else 128
+        decoder_hidden_size = config['decoder_hidden_size'] if 'decoder_hidden_size' in keys else 512
+        decoder_output_size = config['decoder_output_size'] if 'decoder_output_size' in keys else 512
+        bidirectional = not config['unidirectional'] if 'unidirectional' in keys else True
+        return_sources = config['return_sources'] if 'return_sources' in keys else False
+        return_synth_controls = config['return_synth_controls'] if 'return_synth_controls' in keys else False
+        maximum_excitation_amplitude = config['maximum_excitation_amplitude'] if 'maximum_excitation_amplitude' in keys else 0.99
+        maximum_feedback_factor = config['maximum_feedback_factor'] if 'maximum_feedback_factor' in keys else 0.99
+        
+        return cls(batch_size=batch_size,
+                   allowed_strings=allowed_strings,
+                   sample_rate=sample_rate,
+                   physical_modeling_sample_rate=physical_modeling_sample_rate,
+                   example_length=example_length,
+                   fft_size=config['nfft'],
+                   hop_size=config['nhop'],
+                   encoder_hidden_size=encoder_hidden_size,
+                   embedding_size=embedding_size,
+                   decoder_hidden_size=decoder_hidden_size,
+                   decoder_output_size=decoder_output_size,
+                   bidirectional=bidirectional,
+                   return_sources=return_sources,
+                   return_synth_controls=return_synth_controls,
+                   maximum_excitation_amplitude=maximum_excitation_amplitude,
+                   maximum_feedback_factor=maximum_feedback_factor)
+
+    def onset_detection(self, f0_hz):
+        """
+        Detect note onsets from the fundamental frequency.
+        
+        Returns:
+            onset_frame_indices: torch.tensor of shape [n_onsets, 3] with the
+            onsets [batch, string, frame]
+        """
+        
+        # f0_hz [batch_size, n_freq_frames, n_sources]
+        
+        # Onsets and offsets are analyzed from f0 by now.
+        # 0 -> 1 note onset
+        # 1 -> 0 offset
+        # It behaves like a gate signal.
+        on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
+                                              torch.tensor(0., device=f0_hz.device))
+        
+        # Distinguish onsets = 1 from offsets = -1
+        # Differentiate the on_offsets gate signal
+        on_offsets = core.diff(on_offsets)
+        # Separate note onsets and offsets
+        onsets = torch.clamp(on_offsets, 0, 1)
+        #offsets = torch.clamp(on_offsets, -1, 0) * -1
+        # Convert onsets to sample indices: [batch, string, frame].
+        onset_frame_indices = torch.nonzero(onsets, as_tuple=False)
+        return onset_frame_indices
+
+    def forward(self, mix_in, f0_hz, return_synth_controls=False):
+        # audio [batch_size, n_samples]
+        # f0_hz [batch_size, n_freq_frames, n_sources]
+        
+        # Detach from computation graph, so we do not run out of memory.
+        self.detach()
+        
+        mix_in = mix_in.squeeze(dim=1)
+        
+        z = self.encoder(mix_in, f0_hz)  # [batch_size, n_frames, n_sources, embedding_size]
+        batch_size, n_frames, n_sources, embedding_size = z.shape
+        z = z.permute(0, 2, 1, 3)
+        z = z.reshape((batch_size*n_sources, n_frames, embedding_size))
+
+
+        f0_hz = f0_hz.transpose(1, 2)  # [batch_size, n_sources, n_freq_frames]
+        
+        f0_hz_dec = torch.reshape(f0_hz, (batch_size*n_sources, -1))  # [batch_size * n_sources, n_freq_frames]
+        f0_hz_dec = f0_hz_dec.unsqueeze(-1)
+        x = self.decoder(f0_hz=f0_hz_dec, z=z)
+
+        onset_frame_indices = self.onset_detection(f0_hz)
+        
+        # b prediction
+        x_b = self.b_linear(x)
+        b = core.exp_sigmoid(x_b)
+        b = b.squeeze(-1)
+        b = torch.reshape(b, (batch_size, n_sources, n_frames))
+
+        # Apply the synthesis model.
+        pm_sources = self.ks_synth(f0_hz=f0_hz,
+                                   onset_frame_indices=onset_frame_indices,
+                                   b=b)
+        if self.sample_rate != self.physical_modeling_sample_rate:
+            # Resample
+            sources = self.resampler(pm_sources)
+
+        mix_out = torch.sum(sources, dim=1)
+
+        synth_controls = {
+            'f0_hz': f0_hz.detach(),
+            'onset_frame_indices': onset_frame_indices.detach(),
+            'b': b.detach()
+        }
+
+        if self.return_sources and (self.return_synth_controls or return_synth_controls):
+            return mix_out, sources, synth_controls
+        if not self.return_sources and (self.return_synth_controls or return_synth_controls):
+            return mix_out, synth_controls
+        if self.return_sources:
+            return mix_out, sources
+        return mix_out
+
+    def detach(self):
+        """
+        Detach from current computation graph to stop gradient following and
+        not to run out of RAM.
+        """
+        self.ks_synth.detach()
+
+class KarplusStrongAutoencoderD2(_Model):
+    """
+    Autoencoder that encodes a mixture of n voices into synthesis parameters
+    from which the mixture is re-synthesised. Synthesis of each voice is done
+    with a Karplus-Strong model.
+    
+    This model is used in the 'C' experiment.
+    """
+
+    def __init__(self,
+                 batch_size,
+                 allowed_strings=[1, 2, 3, 4, 5, 6],
+                 sample_rate=16000,
+                 physical_modeling_sample_rate=32000,
+                 example_length=64000,
+                 fft_size=512,
+                 hop_size=256,
+                 encoder_hidden_size=256,
+                 embedding_size=128,
+                 decoder_hidden_size=512,
+                 decoder_output_size=512,
+                 bidirectional=False,
+                 return_sources=False,
+                 return_synth_controls=False,
+                 maximum_excitation_amplitude=0.999,
+                 maximum_feedback_factor=0.999):
+        super().__init__()
+
+        # attributes
+        self.batch_size = batch_size
+        self.allowed_strings = allowed_strings
+        self.sample_rate = sample_rate
+        self.physical_modeling_sample_rate = physical_modeling_sample_rate
+        self.fft_size = fft_size
+        self.hop_size = hop_size
+        self.return_sources = return_sources
+        self.return_synth_controls = return_synth_controls
+
+        overlap = hop_size / fft_size
+
+        # -> Latent mixture representation
+        self.encoder = nc.MixEncoderSimple(fft_size=fft_size,
+                                           overlap=overlap,
+                                           hidden_size=encoder_hidden_size,
+                                           embedding_size=embedding_size,
+                                           n_sources=len(allowed_strings),
+                                           bidirectional=bidirectional)
+
+        # -> Latent source representations
+        self.decoder = nc.SynthParameterDecoderSimple(z_size=embedding_size,
+                                            hidden_size=decoder_hidden_size,
+                                            output_size=decoder_output_size,
+                                            bidirectional=bidirectional)
+        
+        # Frame-wise control prediction
+        self.b_linear = torch.nn.Linear(decoder_output_size, 1)
+        self.a_linear = torch.nn.Linear(decoder_output_size, 1)
+        
+        # synth
+        upsampling_factor = physical_modeling_sample_rate / sample_rate
+        pm_example_length = int(example_length * upsampling_factor)
+        pm_hop_size = int(hop_size * upsampling_factor)
+        self.ks_synth = synths.KarplusStrongD2(batch_size=batch_size,
+                                            n_samples=pm_example_length,
+                                            sample_rate=physical_modeling_sample_rate,
+                                            audio_frame_size=pm_hop_size,
+                                            n_strings=len(allowed_strings),
+                                            min_freq=20,
+                                            excitation_length=0.005,
+                                            maximum_excitation_amplitude=maximum_excitation_amplitude,
+                                            maximum_feedback_factor=maximum_feedback_factor)
+        
+        # Resampler to resample physical modeling output to system sample rate.
+        self.resampler = torchaudio.transforms.Resample(orig_freq=physical_modeling_sample_rate,
+                            new_freq=sample_rate)
+
+    @classmethod
+    def from_config(cls, config: dict):
+        # Load parameters from config file.
+        keys = config.keys()
+        batch_size = config['batch_size'] if 'batch_size' in keys else 1
+        allowed_strings = config['allowed_strings'] if 'allowed_strings' in keys else [1, 2, 3, 4, 5, 6]
+        sample_rate = config['sample_rate'] if 'sample_rate' in keys else 16000
+        physical_modeling_sample_rate = config['physical_modeling_sample_rate'] if 'physical_modeling_sample_rate' in keys else sample_rate
+        example_length = config['example_length'] if 'example_length' in keys else 64000
+        encoder_hidden_size = config['encoder_hidden_size'] if 'encoder_hidden_size' in keys else 256
+        embedding_size = config['embedding_size'] if 'embedding_size' in keys else 128
+        decoder_hidden_size = config['decoder_hidden_size'] if 'decoder_hidden_size' in keys else 512
+        decoder_output_size = config['decoder_output_size'] if 'decoder_output_size' in keys else 512
+        bidirectional = not config['unidirectional'] if 'unidirectional' in keys else True
+        return_sources = config['return_sources'] if 'return_sources' in keys else False
+        return_synth_controls = config['return_synth_controls'] if 'return_synth_controls' in keys else False
+        maximum_excitation_amplitude = config['maximum_excitation_amplitude'] if 'maximum_excitation_amplitude' in keys else 0.99
+        maximum_feedback_factor = config['maximum_feedback_factor'] if 'maximum_feedback_factor' in keys else 0.99
+        
+        return cls(batch_size=batch_size,
+                   allowed_strings=allowed_strings,
+                   sample_rate=sample_rate,
+                   physical_modeling_sample_rate=physical_modeling_sample_rate,
+                   example_length=example_length,
+                   fft_size=config['nfft'],
+                   hop_size=config['nhop'],
+                   encoder_hidden_size=encoder_hidden_size,
+                   embedding_size=embedding_size,
+                   decoder_hidden_size=decoder_hidden_size,
+                   decoder_output_size=decoder_output_size,
+                   bidirectional=bidirectional,
+                   return_sources=return_sources,
+                   return_synth_controls=return_synth_controls,
+                   maximum_excitation_amplitude=maximum_excitation_amplitude,
+                   maximum_feedback_factor=maximum_feedback_factor)
+
+    def onset_detection(self, f0_hz):
+        """
+        Detect note onsets from the fundamental frequency.
+        
+        Returns:
+            onset_frame_indices: torch.tensor of shape [n_onsets, 3] with the
+            onsets [batch, string, frame]
+        """
+        
+        # f0_hz [batch_size, n_freq_frames, n_sources]
+        
+        # Onsets and offsets are analyzed from f0 by now.
+        # 0 -> 1 note onset
+        # 1 -> 0 offset
+        # It behaves like a gate signal.
+        on_offsets = torch.where(f0_hz > 0., torch.tensor(1., device=f0_hz.device),
+                                              torch.tensor(0., device=f0_hz.device))
+        
+        # Distinguish onsets = 1 from offsets = -1
+        # Differentiate the on_offsets gate signal
+        on_offsets = core.diff(on_offsets)
+        # Separate note onsets and offsets
+        onsets = torch.clamp(on_offsets, 0, 1)
+        #offsets = torch.clamp(on_offsets, -1, 0) * -1
+        # Convert onsets to sample indices: [batch, string, frame].
+        onset_frame_indices = torch.nonzero(onsets, as_tuple=False)
+        return onset_frame_indices
+
+    def forward(self, mix_in, f0_hz, return_synth_controls=False):
+        # audio [batch_size, n_samples]
+        # f0_hz [batch_size, n_freq_frames, n_sources]
+        
+        # Detach from computation graph, so we do not run out of memory.
+        self.detach()
+        
+        mix_in = mix_in.squeeze(dim=1)
+        
+        z = self.encoder(mix_in, f0_hz)  # [batch_size, n_frames, n_sources, embedding_size]
+        batch_size, n_frames, n_sources, embedding_size = z.shape
+        z = z.permute(0, 2, 1, 3)
+        z = z.reshape((batch_size*n_sources, n_frames, embedding_size))
+
+
+        f0_hz = f0_hz.transpose(1, 2)  # [batch_size, n_sources, n_freq_frames]
+        
+        f0_hz_dec = torch.reshape(f0_hz, (batch_size*n_sources, -1))  # [batch_size * n_sources, n_freq_frames]
+        f0_hz_dec = f0_hz_dec.unsqueeze(-1)
+        x = self.decoder(f0_hz=f0_hz_dec, z=z)
+
+        onset_frame_indices = self.onset_detection(f0_hz)
+        
+        # b prediction
+        x_b = self.b_linear(x)
+        b = core.exp_sigmoid(x_b)
+        b = b.squeeze(-1)
+        b = torch.reshape(b, (batch_size, n_sources, n_frames))
+        
+        # a prediction
+        x_a = self.a_linear(x)
+        a = core.exp_sigmoid(x_a)
+        a = a.squeeze(-1)
+        a = torch.reshape(a, (batch_size, n_sources, n_frames))
+
+        # Apply the synthesis model.
+        pm_sources = self.ks_synth(f0_hz=f0_hz,
+                                   onset_frame_indices=onset_frame_indices,
+                                   b=b,
+                                   a=a)
+        
+        if self.sample_rate != self.physical_modeling_sample_rate:
+            # Resample
+            sources = self.resampler(pm_sources)
+
+        mix_out = torch.sum(sources, dim=1)
+
+        synth_controls = {
+            'f0_hz': f0_hz.detach(),
+            'onset_frame_indices': onset_frame_indices.detach(),
+            'b': b.detach()
+        }
+
+        if self.return_sources and (self.return_synth_controls or return_synth_controls):
+            return mix_out, sources, synth_controls
+        if not self.return_sources and (self.return_synth_controls or return_synth_controls):
+            return mix_out, synth_controls
+        if self.return_sources:
+            return mix_out, sources
+        return mix_out
+
+    def detach(self):
+        """
+        Detach from current computation graph to stop gradient following and
+        not to run out of RAM.
+        """
+        self.ks_synth.detach()
+
 # -------- U-Net Baselines -------------------------------------------------------------------------------------------
 
 class NormalizeSpec(torch.nn.Module):

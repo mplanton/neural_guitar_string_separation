@@ -432,7 +432,7 @@ class TestCore(unittest.TestCase):
             ks.detach()
     
     def test_KSC2_synthetic_input(self):
-        save_output = True
+        save_output = False
         
         excitation_length = 0.005
         n_examples = 2
@@ -548,6 +548,231 @@ class TestCore(unittest.TestCase):
             # Disable gradient tracking.
             ks.detach()
 
+    def test_KSD1_synthetic_input(self):
+        save_output=True
+        
+        excitation_length = 0.005
+        n_examples = 2
+        batch_size = 2
+        sr = 32000
+        if save_output == True:
+            example_length = 2
+        else:
+            example_length = 0.16 # sec
+        # Number of sources in the mix
+        J = 6
+        # The FFT hop size is the audio frame length
+        fft_hop_size = 256
+        frame_rate = sr // fft_hop_size
+        # Nuber of time samples per train example
+        M = int(example_length * sr)
+        # Number of STFT time frames per train example
+        N = int(M / fft_hop_size)
+        
+        f0_hz, onset_frame_indices, a, s, r = \
+            generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
+        b = s # rename old nomenclature
+        
+        ks = synths.KarplusStrongD1(batch_size=batch_size,
+                                  n_samples=M,
+                                  sample_rate=sr,
+                                  audio_frame_size=fft_hop_size,
+                                  n_strings=J,
+                                  min_freq=20,
+                                  excitation_length=excitation_length)
+        
+        # Synthesize sources from parameters
+        sources = torch.zeros((batch_size, J, n_examples * M))
+        for example in range(n_examples):
+            #print("Calculate example", example)
+            
+            f0_in = f0_hz[example]
+            onset_frame_indices_in = onset_frame_indices[example]
+            b_in = b[example]
+            
+            controls = ks.get_controls(f0_in,
+                                       onset_frame_indices_in,
+                                       b_in)
+            sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
+        
+        # Save sources
+        if save_output == True:
+            for batch in range(batch_size):
+                wavfile.write(f"KSD1_synth_sources_batch{batch}.wav", sr,
+                              sources[batch].T.numpy())
+
+    def test_KSD1_differentiability(self):
+        excitation_length=0.005
+        n_examples = 2
+        batch_size = 2
+        sr = 16000
+        example_length = 0.16 # sec
+        # Number of sources in the mix
+        J = 2
+        # The FFT hop size is the audio frame length
+        fft_hop_size = 256
+        frame_rate = sr // fft_hop_size
+        # Nuber of time samples per train example
+        M = int(example_length * sr)
+        # Number of STFT time frames per train example
+        N = int(M / fft_hop_size)
+        
+        f0_hz, onset_frame_indices, a, s, r = \
+            generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
+        b = s # rename old nomenclature
+        
+        ks = synths.KarplusStrongD1(batch_size=batch_size,
+                                  n_samples=M,
+                                  sample_rate=sr,
+                                  audio_frame_size=fft_hop_size,
+                                  n_strings=J,
+                                  min_freq=20,
+                                  excitation_length=excitation_length)
+        
+        for example in range(n_examples):
+            #print("Calculate example", example)
+            f0_in = f0_hz[example]
+            onset_frame_indices_in = onset_frame_indices[example]
+            b_in = b[example]
+            
+            #check_attributes_for_gradients(ks)
+
+            # Zeroing out the gradient
+            if b_in.grad is not None:
+                b_in.grad.zero_()
+            
+            # Predicted controls from the neural network.
+            b_in.requires_grad = True
+            
+            sources = ks(f0_in,
+                         onset_frame_indices_in,
+                         b_in)
+            
+            # Dummy cost function
+            error = sources.sum()
+            
+            #print("Do backward pass.")
+            error.backward()
+        
+            # Disable gradient tracking.
+            ks.detach()
+
+    def test_KSD2_synthetic_input(self):
+        save_output=True
+        
+        excitation_length = 0.005
+        n_examples = 2
+        batch_size = 2
+        sr = 32000
+        if save_output == True:
+            example_length = 2
+        else:
+            example_length = 0.16 # sec
+        # Number of sources in the mix
+        J = 6
+        # The FFT hop size is the audio frame length
+        fft_hop_size = 256
+        frame_rate = sr // fft_hop_size
+        # Nuber of time samples per train example
+        M = int(example_length * sr)
+        # Number of STFT time frames per train example
+        N = int(M / fft_hop_size)
+        
+        f0_hz, onset_frame_indices, a, s, r = \
+            generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
+        b = s # rename old nomenclature
+        
+        ks = synths.KarplusStrongD2(batch_size=batch_size,
+                                  n_samples=M,
+                                  sample_rate=sr,
+                                  audio_frame_size=fft_hop_size,
+                                  n_strings=J,
+                                  min_freq=20,
+                                  excitation_length=excitation_length)
+        
+        # Synthesize sources from parameters
+        sources = torch.zeros((batch_size, J, n_examples * M))
+        for example in range(n_examples):
+            #print("Calculate example", example)
+            
+            f0_in = f0_hz[example]
+            onset_frame_indices_in = onset_frame_indices[example]
+            b_in = b[example]
+            a_in = a[example]
+            
+            controls = ks.get_controls(f0_in,
+                                       onset_frame_indices_in,
+                                       b_in,
+                                       a_in)
+            sources[..., example * M : example * M + M] = ks.get_signal(**controls).squeeze(-1)
+        
+        # Save sources
+        if save_output == True:
+            for batch in range(batch_size):
+                wavfile.write(f"KSD2_synth_sources_batch{batch}.wav", sr,
+                              sources[batch].T.numpy())
+
+    def test_KSD2_differentiability(self):
+        excitation_length=0.005
+        n_examples = 2
+        batch_size = 2
+        sr = 16000
+        example_length = 0.16 # sec
+        # Number of sources in the mix
+        J = 2
+        # The FFT hop size is the audio frame length
+        fft_hop_size = 256
+        frame_rate = sr // fft_hop_size
+        # Nuber of time samples per train example
+        M = int(example_length * sr)
+        # Number of STFT time frames per train example
+        N = int(M / fft_hop_size)
+        
+        f0_hz, onset_frame_indices, a, s, r = \
+            generateParametersB(frame_rate, batch_size, n_examples, example_length, N, J)
+        b = s # rename old nomenclature
+        
+        ks = synths.KarplusStrongD2(batch_size=batch_size,
+                                  n_samples=M,
+                                  sample_rate=sr,
+                                  audio_frame_size=fft_hop_size,
+                                  n_strings=J,
+                                  min_freq=20,
+                                  excitation_length=excitation_length)
+        
+        for example in range(n_examples):
+            #print("Calculate example", example)
+            f0_in = f0_hz[example]
+            onset_frame_indices_in = onset_frame_indices[example]
+            b_in = b[example]
+            a_in = a[example]
+            
+            #check_attributes_for_gradients(ks)
+
+            # Zeroing out the gradient
+            if b_in.grad is not None:
+                b_in.grad.zero_()
+            if a_in.grad is not None:
+                a_in.grad.zero_()
+            
+            # Predicted controls from the neural network.
+            b_in.requires_grad = True
+            a_in.requires_grad = True
+            
+            sources = ks(f0_in,
+                         onset_frame_indices_in,
+                         b_in,
+                         a_in)
+            
+            # Dummy cost function
+            error = sources.sum()
+            
+            #print("Do backward pass.")
+            error.backward()
+        
+            # Disable gradient tracking.
+            ks.detach()
+
 if __name__ == "__main__":
     #unittest.main()
 
@@ -557,5 +782,9 @@ if __name__ == "__main__":
     #test.test_KS_differentiability()
     #test.test_KSC_synthetic_input()
     #test.test_KSC_differentiability()
-    test.test_KSC2_synthetic_input()
+    #test.test_KSC2_synthetic_input()
     #test.test_KSC2_differentiability()
+    #test.test_KSD1_synthetic_input()
+    #test.test_KSD1_differentiability()
+    test.test_KSD2_synthetic_input()
+    #test.test_KSD2_differentiability()
