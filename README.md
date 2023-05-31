@@ -1,10 +1,11 @@
-# Unsupervised Guitar String Music Source Separation
+# Guitar String Source Separation
 
-It contains a re-implementation of parts of the DDSP library in PyTorch.
+This is a fork of the [original code](https://github.com/schufo/umss) for singing voice separation described in the [original paper](https://arxiv.org/abs/2201.09592).
+It contains a re-implementation of parts of the TensorFlow [DDSP library](https://github.com/magenta/ddsp) in PyTorch.
 
-[original code](https://github.com/schufo/umss)
-
-[original paper](https://arxiv.org/abs/2201.09592)
+I implemented different physical string models which are used inside a neural network architecture for the task of guitar string separation during the course of my master's thesis project.
+My research is documented in my master's thesis with the title *Instrument-Specific Music Source Separation via Interpretable and Physics-Inspired Artificial Intelligence* which can be found [here](https://phaidra.kug.ac.at/o:129491).
+The proposed method serves as a proof of concept for introducing differentiable physical modeling synthesis into neural music source separation, leading to a basis for high quality guitar string separation.
 
 
 ## Requirements
@@ -85,5 +86,5 @@ Plots are saved under `eval_compare/date/`.
 Copyright 2021 Kilian Schulze-Forster of Télécom Paris, Institut Polytechnique de Paris.
 All rights reserved.
 
-**Modified by Manuel Planton for Guitar String separation.**
+Modified by Manuel Planton for guitar string separation in 2023, Institute for Electronic Music and Acoustics in Graz.
 
