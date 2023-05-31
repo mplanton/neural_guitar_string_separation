@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Usage: examination.sh <trained-model-path> <test-set> <'list.wav of.wav test.wav files.wav'>
+# Usage: examination.sh <trained-model-path> <test-set> <which> <'list.wav of.wav test.wav files.wav'>
 #
 # Your conda environment must be active when executing this script!
 
@@ -14,7 +14,7 @@
 # * plots inferred data
 
 printUsage () {
-    echo "Usage: examination.sh <trained-model-path> <test-set> <'list.wav of.wav test.wav files.wav'>"
+    echo "Usage: examination.sh <trained-model-path> <test-set> <which> <'list.wav of.wav test.wav files.wav'>"
     echo
     echo "Your conda environment must be active when executing this script!"
     echo
@@ -29,11 +29,13 @@ printUsage () {
     echo
     echo "<test-set>: Name of the test set to use for evaluation and inference (e.g. Guitarset)."
     echo
+    echo "<which>: Which model to load (best or last). The best model on validation or the last trained one."
+    echo
     echo "<list-of-test-files>: The list of test files are used for inference (Give at least batch_size test files for inference to work)."
 }
 
 # Check if all three arguments are given.
-if [ ${#1} -eq 0 ] || [ ${#2} -eq 0 ] || [ ${#3} -eq 0 ]
+if [ ${#1} -eq 0 ] || [ ${#2} -eq 0 ] || [ ${#3} -eq 0 ] || [ ${#4} -eq 0 ]
 then
     echo Missing arguments!
     echo
@@ -50,7 +52,8 @@ fi
 
 trained_model_path=$1
 test_set=$2
-test_files=$3
+which_model=$3
+test_files=$4
 
 config_file="config*.txt"
 
@@ -98,8 +101,13 @@ mv $tag$f_names $plots_path
 echo "Saved learning curves to $plots_path."
 echo
 
+echo
+echo "Inference..."
+python3 inference.py --tag $tag --which $which_model --test-set $test_set --song-names $test_files
+echo "Inference done."
+
 echo "Evaluation..."
-python3 eval.py --tag $tag --test-set $test_set
+python3 eval.py --tag $tag --which $which_model --test-set $test_set
 echo "Evaluation done."
 
 echo "Plot evaluation statistics."
@@ -107,9 +115,4 @@ python3 eval_show_stats.py --tag $tag --info-json $json_file --box-plot
 f_names="_eval_*.*"
 mv $tag$f_names $plots_path
 echo "Saved evaluation statistics plots to $plots_path."
-
-echo
-echo "Inference..."
-python3 inference.py --tag $tag --which best --test-set $test_set --song-names $test_files
-echo "Inference done."
 

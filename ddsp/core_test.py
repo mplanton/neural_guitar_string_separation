@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import librosa
 import librosa.display
 import math
+from scipy.io import wavfile
 #import spectrum
 
 import unittest
@@ -356,8 +357,8 @@ class TestCore(unittest.TestCase):
         N = 65 # Filter-order is N - 1
 
         # Generate an input signal of length L
-        duration = 1 # sec
-        L = sample_rate * duration
+        duration = 0.5 # sec
+        L = int(sample_rate * duration)
         input_signal = torch.rand((batch_size, n_filters, L)) * 2 - 1   
 
         # Make time varying fc of shape [batch_size, n_time, 1].
@@ -436,14 +437,257 @@ class TestCore(unittest.TestCase):
             error = y.sum()
             error.backward()
 
-if __name__ == '__main__':
-    test = TestCore()
+    def test_DCBlocker(self):
+        save_output=False
+        
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        
+        filt = core.DCBlocker(batch_size, n_sources)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        
+        # Noise with an offset
+        x = torch.rand((batch_size, n_sources, sig_len)) * 2
+        
+        
+        y = torch.zeros_like(x)
+        for i in range(sig_len):
+            x_in = x[..., i]
+            y[..., i] = filt(x_in)
+        
+        if save_output == True:
+            for batch in range(batch_size):
+                wavfile.write(f"test_DCBlocker_batch{batch}.wav",
+                              rate=sr,
+                              data=y[batch].T.numpy())
+
+
+    def test_DCBlocker_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        
+        filt = core.DCBlocker(batch_size, n_sources)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient (this is normally done with the optimizer)
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            
+            y = filt(x_in)
+
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+
+    def test_HaOriginal(self):
+        save_output=False
+        
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        
+        filt = core.HaOriginal(batch_size, n_sources)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        
+        # White Noise input
+        x = torch.rand((batch_size, n_sources, sig_len)) * 2 - 1
+        
+        y = torch.zeros_like(x)
+        for i in range(sig_len):
+            x_in = x[..., i]
+            y[..., i] = filt(x_in)
+        
+        if save_output == True:
+            for batch in range(batch_size):
+                wavfile.write(f"test_HaOriginal_batch{batch}.wav",
+                              rate=sr,
+                              data=y[batch].T.numpy())
     
+    
+    def test_HaOriginal_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        
+        filt = core.HaOriginal(batch_size, n_sources)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient (this is normally done with the optimizer)
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            
+            y = filt(x_in)
+    
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+
+    def test_HaDecayStretch(self):
+        save_output=False
+        
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        s = 0.4
+        
+        filt = core.HaDecayStretch(batch_size, n_sources, s=s)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        
+        # White Noise input
+        x = torch.rand((batch_size, n_sources, sig_len)) * 2 - 1
+        
+        y = torch.zeros_like(x)
+        for i in range(sig_len):
+            x_in = x[..., i]
+            y[..., i] = filt(x_in)
+        
+        if save_output == True:
+            for batch in range(batch_size):
+                wavfile.write(f"test_HaDecayStretch_batch{batch}.wav",
+                              rate=sr,
+                              data=y[batch].T.numpy())
+
+    def test_HaDecayStretch_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        s = 0.3
+        s = torch.ones((batch_size, n_sources)) * s
+        
+        # Init with default s
+        filt = core.HaDecayStretch(batch_size, n_sources)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient (this is normally done with the optimizer)
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            if s.grad is not None:
+                s.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            s.requires_grad = True
+            filt.set_coeff(s)
+            
+            y = filt(x_in)
+
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+    
+    def test_OnePole(self):
+        save_output=False
+        
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        r = 0.8
+        
+        filt = core.OnePole(batch_size, n_sources, r=r)
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        
+        # White Noise input
+        x = torch.rand((batch_size, n_sources, sig_len)) * 2 - 1
+        
+        y = torch.zeros_like(x)
+        for i in range(sig_len):
+            x_in = x[..., i]
+            y[..., i] = filt(x_in)
+        
+        if save_output == True:
+            for batch in range(batch_size):
+                wavfile.write(f"test_OnePole_batch{batch}.wav",
+                              rate=sr,
+                              data=y[batch].T.numpy())
+
+    def test_OnePole_differentiability(self):
+        batch_size = 2
+        n_sources = 3
+        sr = 16000
+        r = 0.3
+        
+        filt = core.OnePole(batch_size, n_sources, r)
+        r = torch.ones((batch_size, n_sources)) * r
+        
+        dur = 0.02 # sec
+        sig_len = int(dur * sr)
+        x = torch.rand((batch_size, n_sources, sig_len))
+        
+        for i in range(sig_len):
+            x_in = x[..., i]
+            # Zeroing out the gradient (this is normally done with the optimizer)
+            if x_in.grad is not None:
+                x_in.grad.zero_()
+            if r.grad is not None:
+                r.grad.zero_()
+            # Detach from current graph.
+            filt.detach()
+            
+            # Set parameter to calculate gradient
+            x_in.requires_grad = True
+            r.requires_grad = True
+            filt.set_coeff(r)
+            
+            y = filt(x_in)
+
+            # Dummy cost function
+            error = y.sum()
+            error.backward()
+
+if __name__ == '__main__':
     unittest.main()
+    
+    #test = TestCore()
     
     #test.test_simple_highpass_differentiability()
     #test.test_sinc_filter()
     #test.test_fft_convolve()
     #test.test_time_domain_FIR()
     #test.test_time_domain_FIR_differentiability()
-    
+    #test.test_DCBlocker()
+    #test.test_DCBlocker_differentiability()
+    #test.test_HaOriginal()
+    #test.test_HaOriginal_differentiability()
+    #test.test_HaDecayStretch()
+    #test.test_HaDecayStretch_differentiability()
+    #test.test_OnePole()
+    #test.test_OnePole_differentiability()

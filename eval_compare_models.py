@@ -26,6 +26,22 @@ Path(save_path).mkdir(parents=True, exist_ok=True)
 metrics = ['sp_SNR', 'sp_SI-SNR', 'SI-SDR', 'mel_cep_dist']
 evals = []
 
+# Labels
+labels = {
+    "KarplusStrong_ex1" : "ExA1",
+    "KarplusStrong_ex2" : "ExA2",
+    "KarplusStrongC_ex1" : "ExC1",
+    "KarplusStrongC_ex2" : "ExC2",
+    "KarplusStrongB_ex0" : "ExB0",
+    "KarplusStrongB_ex1" : "ExB1",
+    "KarplusStrongB_ex2" : "ExB2",
+    "KarplusStrongB_ex2_1" : "ExB2.1",
+    "KarplusStrongB_ex3" : "ExB3",
+    "KarplusStrongB_ex4" : "ExB4",
+    "KarplusStrongC_ex1" : "ExC1",
+    "KarplusStrongC_ex2" : "ExC2",
+    
+}
 
 # Get the baseline metrics.
 baseline_path = model_paths[0]
@@ -79,13 +95,19 @@ for model_path in model_paths:
     # Direct synthesis
     eval_synth = pd.read_pickle("evaluation/" + tag + "/eval_results_" + \
                                  f0_add_on + "_" + ds + "/all_results.pandas")
-    eval_synth['name'] = tag[-3:] + "_synth"
+    if tag not in labels.keys():
+        eval_synth['name'] = tag + "_synth"
+    else:
+        eval_synth['name'] = labels[tag] + "_synth"
     evals.append(eval_synth)
     
     # Masked
     eval_masked = pd.read_pickle("evaluation/" + tag + "_masking/eval_results_" + \
                                  f0_add_on + "_" + ds + "/all_results.pandas")
-    eval_masked['name'] = tag[-3:] + "_masked"
+    if tag not in labels.keys():
+        eval_masked['name'] = tag + "_masked"
+    else:
+        eval_masked['name'] = labels[tag] + "_masked"
     evals.append(eval_masked)
 
 

@@ -25,6 +25,7 @@ tqdm.monitor_interval = 0
 
 writer_counter = 0
 
+
 def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writer):
     loss_container = utils.AverageMeter()
     network.train()
@@ -66,8 +67,9 @@ def train(args, network, device, train_sampler, optimizer, ss_weights_dict, writ
             lsf_loss = lsf_loss_fn(lsf) * args.loss_lsf_weight
             loss -= lsf_loss
         
-        pbar.set_description("Training batch (train_loss: %4.3f)" % loss)
+        pbar.set_description("Training batch (train_loss: %4.2f)" % loss)
         
+        # Commented out for KSB dummy training
         loss.backward()
         optimizer.step()
         loss_container.update(loss.item(), f0.size(0))
@@ -82,7 +84,8 @@ def valid(args, network, device, valid_sampler):
     network.eval()
     if args.supervised: network.return_sources = True
     with torch.no_grad():
-        for d in valid_sampler:
+        pbar = tqdm.tqdm(valid_sampler, disable=args.quiet)
+        for d in pbar:
             x = d[0]  # audio
             f0 = d[1]  # f0
             x, f0 = x.to(device), f0.to(device) #, z.to(device)
@@ -100,6 +103,7 @@ def valid(args, network, device, valid_sampler):
                 x = d[2].transpose(1, 2).reshape((batch_size * args.n_sources, -1)).to(device)  # true sources [batch_size * n_sources, n_samples]
                 y_hat = y_hat[1].reshape((batch_size * args.n_sources, -1))  # source estimates [batch_size * n_sources, n_samples]
             loss = loss_fn(x, y_hat)
+            pbar.set_description("Validation batch (valid_loss: %4.2f)" % loss)
             loss_container.update(loss.item(), f0.size(0))
         return loss_container.avg
 
@@ -262,15 +266,11 @@ def main():
     parser.add_argument('--voiced-unvoiced-same-noise', action='store_true', default=False)
     parser.add_argument('--physical-modeling-sample-rate', type=int, default=16000,
                         help='Sample rate of the physical model which influences the range of fc.')
-    parser.add_argument('--excitation-amplitude-scale', type=float, default=10,
-                        help='Maximum value of the excitation amplitude factor.')
-    parser.add_argument('--maximum-excitation-length', type=float, default=0.05,
-                        help='Maximum length of the excitation signal in seconds.')
-    parser.add_argument('--minimum-feedback-factor', type=float, default=0.85,
-                        help='Minimum value of the feedback factor g_f.')
-    
-    
-    
+    parser.add_argument('--maximum-excitation-amplitude', type=float, default=0.99,
+                        help='Maximum value of the excitation amplitude.')
+    parser.add_argument('--maximum-feedback-factor', type=float, default=0.99,
+                        help='Maximum value of the loop feedback factor.')
+
     parser.add_argument('--nb-workers', type=int, default=4,
                         help='Number of workers for dataloader.')
 

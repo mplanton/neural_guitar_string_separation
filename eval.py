@@ -67,7 +67,8 @@ parser.add_argument('--f0-from-mix', action='store_true', default=False)
 parser.add_argument('--no-baselines', action='store_true', default=False, help= \
                     "Do NOT calculate baseline metrics. The upper basline is the" \
                     "Ideal Ratio Mask and the lower baseline is white noise.")
-
+parser.add_argument('--which', type=str, default='best', choices=['best', 'last'],
+                    help="Which model to load: the best model on validation or the last trained one.")
 args, _ = parser.parse_known_args()
 
 tag = args.tag
@@ -107,7 +108,7 @@ if baselines:
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-trained_model, model_args = utils.load_model(tag, 'best', device, return_args=True)
+trained_model, model_args = utils.load_model(tag, args.which, device, return_args=True)
 trained_model.return_synth_params = False
 trained_model.return_sources = True
 

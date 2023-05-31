@@ -1580,6 +1580,209 @@ class SimpleHighpass:
         self.last_y = self.last_y.detach()
         return self
 
+# Extension to the DDSP library for physical modeling
+class DCBlocker:
+    """
+    A small recursive filter for DC blocking.
+    taken from:
+    https://ccrma.stanford.edu/~jos/fp/DC_Blocker.html
+    accessed: 08.09.2022
+    
+    The filter coefficient r may be adapted for different sampling rates.
+    The filters are indexed via [batch_size, n_filters].
+    
+    batch_size: int, Batch size
+    n_filters: int, Number of filters per batch
+    r: float, filter coefficient (default 0.995 good for sr=44.1kHz)
+    """
+    def __init__(self, batch_size: int, n_filters: int, r=0.995):
+        self.r = r
+        self.last_x = torch.zeros((batch_size, n_filters))
+        self.last_y = torch.zeros((batch_size, n_filters))
+    
+    def __call__(self, x):
+        """
+        Calculate one output sample from one input sample.
+        x: torch.tensor of shape [batch_size, n_filters]
+        """
+        assert x.shape == self.last_y.shape, \
+            f"x must have shape {self.last_y.shape} but has shape {x.shape}!"
+        
+        y = x - self.last_x + self.r * self.last_y
+        self.last_x = x
+        self.last_y = y
+        return y
+    
+    def clear_state(self):
+        """
+        Set the internal state of the filter to zero.
+        """
+        self.last_x = torch.zeros_like(self.last_x)
+        self.last_y = torch.zeros_like(self.last_y)
+
+    def detach(self):
+        """
+        Hold the internal state of the filter
+        and detach from current graph.
+        """
+        self.last_x = self.last_x.detach()
+        self.last_y = self.last_y.detach()
+        return self
+
+
+# Extension to the DDSP library for physical modeling
+class HaOriginal:
+    """
+    The original Karplus-Strong loop lowpass filter.
+    It is a non parametric fixed one-zero filter.
+    
+    The filters are indexed via [batch_size, n_filters].
+
+    from:
+    Jaffe & Smith, 1983 "Extensions of the Karplus-Strong Plucked-String Algorithm"
+    
+    batch_size: int, Batch size
+    n_filters: int, Number of filters per batch
+    """
+    def __init__(self, batch_size: int, n_filters: int):
+        self.last_x = torch.zeros((batch_size, n_filters))
+    
+    def __call__(self, x):
+        """
+        Calculate one output sample from one input sample.
+        x: torch.tensor of shape [batch_size, n_filters]
+        """
+        assert x.shape == self.last_x.shape, \
+            f"x must have shape {self.last_y.shape} but has shape {x.shape}!"
+        y = 0.5 * x + 0.5 * self.last_x
+        self.last_x = x
+        return y
+    
+    def clear_state(self):
+        """
+        Set the internal state of the filter to zero.
+        """
+        self.last_x = torch.zeros_like(self.last_x)
+
+    def detach(self):
+        """
+        Hold the internal state of the filter
+        and detach from current graph.
+        """
+        self.last_x = self.last_x.detach()
+        return self
+
+# Extension to the DDSP library for physical modeling
+class HaDecayStretch:
+    """
+    Decay stretching Karplus-Strong loop lowpass filter.
+    It is a one-zero lowpass filter.
+    
+    from:
+    Jaffe & Smith, 1983 "Extensions of the Karplus-Strong Plucked-String Algorithm"
+    
+    Each lowpass has its own coefficient s.
+    The filters are indexed via [batch_size, n_filters].
+    
+    batch_size: int, Batch size
+    n_filters: int, Number of filters per batch
+    s: float, initial filter coefficient
+    """
+    def __init__(self, batch_size: int, n_filters: int, s=0.5):
+        self.s = torch.ones((batch_size, n_filters)) * s
+        self.last_x = torch.zeros((batch_size, n_filters))
+    
+    def set_coeff(self, s):
+        """
+        s: torch.tensor of shape [batch_size, n_filters],
+            the new filter coefficients for the filters.
+        """
+        assert s.shape == self.s.shape, \
+            f"s must have shape {self.s.shape} but has shape {s.shape}!"
+        self.s = s
+    
+    def __call__(self, x):
+        """
+        Calculate one output sample from one input sample.
+        x: torch.tensor of shape [batch_size, n_filters]
+        """
+        assert x.shape == self.last_x.shape, \
+            f"x must have shape {self.last_y.shape} but has shape {x.shape}!"
+        y = (1 - self.s) * x + self.s * self.last_x
+        self.last_x = x
+        return y
+    
+    def clear_state(self):
+        """
+        Set the internal state of the filter to zero.
+        """
+        self.last_x = torch.zeros_like(self.last_x)
+
+    def detach(self):
+        """
+        Hold the internal state of the filter
+        and detach from current graph.
+        """
+        self.s = self.s.detach()
+        self.last_x = self.last_x.detach()
+        return self
+
+# Extension to the DDSP library for physical modeling
+class OnePole:
+    """
+    A one-pole lowpass filter that holds its state.
+    Used as dynamics filter for the Karplus-Strong string model.
+    
+    Each lowpass has its own cutoff frequency.
+    The filters are indexed via [batch_size, n_filters].
+    Call `set_coeff(r)` before using the filter.
+    
+    from:
+    Jaffe & Smith, 1983 "Extensions of the Karplus-Strong Plucked-String Algorithm"
+    
+    batch_size: int, Batch size
+    n_filters: int, Number of filters per batch
+    r: float, initial coefficient r
+    """
+    def __init__(self, batch_size: int, n_filters: int, r: float):
+        assert (r >= 0) and (r <= 1), f"r must be between 0 and 1 but is {r}!"
+        self.r = torch.ones((batch_size, n_filters)) * r
+        self.last_y = torch.zeros((batch_size, n_filters))
+    
+    def set_coeff(self, r):
+        """
+        r: torch.tensor of shape [batch_size, n_filters],
+            the cutoff frequencies the filters should be set to
+        """
+        assert r.shape == self.r.shape, \
+            f"r must have shape {self.r.shape} but has shape {r.shape}!"
+        self.r = r
+    
+    def __call__(self, x):
+        """
+        Calculate one output sample from one input sample.
+        x: torch.tensor of shape [batch_size, n_filters]
+        """
+        assert x.shape == self.last_y.shape, \
+            f"x must have shape {self.last_y.shape} but has shape {x.shape}!"
+        y = (1 - self.r) * x + self.r * self.last_y
+        self.last_y = y
+        return y
+    
+    def clear_state(self):
+        """
+        Set the internal state of the filter to zero.
+        """
+        self.last_y = torch.zeros_like(self.last_y)
+
+    def detach(self):
+        """
+        Hold the internal state of the filter
+        and detach from current graph.
+        """
+        self.r = self.r.detach()
+        self.last_y = self.last_y.detach()
+        return self
 
 # Extension to the DDSP library for physical modeling
 class TimeDomainFIR:

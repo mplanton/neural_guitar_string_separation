@@ -654,7 +654,7 @@ class Guitarset(torch.utils.data.IterableDataset):
     The Dataset is empty when the first end of a stream of audio files is reached.
     This dataset loads examples separately from disk.
     
-    Currently this does NOT support muti process loading with multiple workers!
+    Currently this does NOT support multi process loading with multiple workers!
     So make shure to set `num_workers` to 0 or 1 in the DataLoader.
     
     The Guitarset is a dataset of single string classical guitar recordings featuring
